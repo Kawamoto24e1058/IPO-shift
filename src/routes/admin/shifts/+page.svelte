@@ -44,12 +44,16 @@
     { id: 'staff_17', uid: 'staff_17', name: '井上', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 25000, target_monthly_income: 25000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor', isLateSubmission: true }
   ]);
 
-  // 2. カレンダー年月選択状態
+  // 2. カレンダー年月選択状態 (デフォルトは募集対象月である翌月に自動スライド)
   const today = new Date();
-  const todayYear = today.getFullYear();
-  const todayMonth = today.getMonth() + 1;
-  let currentYear = $state(todayYear);
-  let currentMonth = $state(todayMonth);
+  let defaultYear = today.getFullYear();
+  let defaultMonth = today.getMonth() + 2; // getMonth()は0-indexedなので+1で今月、+2で翌月
+  if (defaultMonth > 12) {
+    defaultMonth = 1;
+    defaultYear += 1;
+  }
+  let currentYear = $state(defaultYear);
+  let currentMonth = $state(defaultMonth);
 
   // 3. 表示タブ選択 ('puzzle' または 'settings')
   let activeTab = $state<'puzzle' | 'settings'>('puzzle');
@@ -1612,6 +1616,7 @@
   // 初期化ロード
   onMount(async () => {
     initUnicesEvents(currentYear, currentMonth);
+    initFsDays(currentYear, currentMonth);
     await loadMonthData();
   });
 </script>
