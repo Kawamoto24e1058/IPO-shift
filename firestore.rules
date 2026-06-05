@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 特権UID（デプロイ時に必要に応じて環境変数の値やFirebase Consoleで指定された値に書き換える）
+    // セキュリティルール内では動的環境変数が使えないため、"YOUR_OWNER_UID_HERE" を実際の特権UIDに書き換えてください。
+    function isOwner(request) {
+      return request.auth != null && (
+        request.auth.uid == "YOUR_OWNER_UID_HERE"
+      );
+    }
+
+    // ログインユーザーが管理者かどうかを判定するヘルパー
+    // 自身が特権UIDであるか、Firestoreの `users` コレクションの `isAdmin` フィールドが true であること
+    function isAdmin(request) {
+      return request.auth != null && (
+        isOwner(request) ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isAdmin == true
+      );
+    }
+
+    // 自身がドキュメントの所有者であるか判定
+    function isSelf(request, userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    match /users/{userId} {
+      // スタッフ一覧表示や認証チェックのため、全ログインユーザーは読み取り可能
+      allow read: if request.auth != null;
+      
+      // 新規作成は本人のみ。初期作成時は特権UIDでない限り `isAdmin` は必ず `false`
+      allow create: if request.auth != null && isSelf(request, userId) && 
+        (isOwner(request) || request.resource.data.isAdmin == false);
+
+      // 更新ルール
+      allow update: if request.auth != null && (
+        // 1. 一般スタッフ：自分自身のプロフィールを更新できるが、`isAdmin` や `role` などの権限フィールドは変更不可
+        (isSelf(request, userId) && 
+         !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'role', 'email'])) ||
+        
+        // 2. 管理者：他人のドキュメントを更新できる（isAdmin/roleのトグル可能）
+        // 詰み防止のため、自分自身の `isAdmin` や `role` を変更することは管理者であっても不可
+        (isAdmin(request) && 
+         (!isSelf(request, userId) || !request.resource.data.diff(resource.data).affectedKeys().hasAny(['isAdmin', 'role'])))
+      );
+
+      // 削除は管理者のみ許可（ただし、自分自身のアカウントは削除不可）
+      allow delete: if isAdmin(request) && !isSelf(request, userId);
+    }
+
+    // シフト希望 (wishes) コレクション
+    match /wishes/{wishId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        isAdmin(request) ||
+        (wishId.split('_')[0] == request.auth.uid && (
+          // 個別解除されているか、提出前であれば書込可能
+          // wishes ID フォーマット: {userId}_{dateStr} (例: emp_1_2026-05-21)
+          // submittals ID フォーマット: {userId}_{year}_{month} (例: emp_1_2026_05)
+          get(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])).data.isUnlocked == true ||
+          !exists(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])) ||
+          get(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])).data.isSubmitted == false
+        ))
+      );
+    }
+
+    // 提出ステータス (submittals) コレクション
+    match /submittals/{submittalId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && (
+        isAdmin(request) || 
+        submittalId.split('_')[0] == request.auth.uid
+      );
+    }
+  }
+}
