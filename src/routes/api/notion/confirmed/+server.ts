@@ -1,6 +1,9 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { NOTION_API_TOKEN, NOTION_CONFIRMED_DATABASE_ID } from '$env/static/private';
+import { env } from '$env/dynamic/private';
+
+const NOTION_API_TOKEN = env.NOTION_API_TOKEN;
+const NOTION_CONFIRMED_DATABASE_ID = env.NOTION_CONFIRMED_DATABASE_ID;
 
 export const POST: RequestHandler = async ({ request }) => {
   try {
