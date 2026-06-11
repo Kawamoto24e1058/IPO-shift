@@ -819,57 +819,85 @@
           const seatSlots = TIME_SLOTS.filter(slot => isSlotInInterval(slot, seat.startTime, seat.endTime));
           if (seatSlots.length === 0) continue;
 
-          // 絶対制約による候補者フィルタ
-          const candidates = activeStaffsForAuto.filter(s => {
-            // 1. 席のタイプに対応した役割タグを持っているか
-            if (!(s.tags ?? []).includes(seat.type)) return false;
+          let candidates: Staff[] = [];
+          let selectedPhase = 1;
 
-            // 2. 希望提出状況チェック
-            const wish = normalizedWishes[s.id];
-            if (!wish || wish.type === 'ng') return false;
+          // Phase 1 から Phase 4 まで段階的に緩和しながら候補者を探索
+          for (let phase = 1; phase <= 4; phase++) {
+            candidates = activeStaffsForAuto.filter(s => {
+              // --- 共通の絶対死守制約 ---
+              // 1. 席のタイプに対応した役割タグを持っているか
+              if (!(s.tags ?? []).includes(seat.type)) return false;
 
-            // 3. 希望時間との重なり（特定時間希望の場合）
-            const targetSlots = wish.type === 'specific'
-              ? seatSlots.filter(slot => isSlotInInterval(slot, wish.startTime, wish.endTime))
-              : seatSlots;
+              // 2. 希望提出状況チェック
+              const wish = normalizedWishes[s.id];
+              if (!wish || wish.type === 'ng') return false;
 
-            // 特定時間希望の場合、最低30分（2スロット）以上の重なりが必要
-            if (wish.type === 'specific' && targetSlots.length < 2) return false;
+              // 3. 希望時間との重なり（特定時間希望の場合、最低30分以上）
+              const targetSlots = wish.type === 'specific'
+                ? seatSlots.filter(slot => isSlotInInterval(slot, wish.startTime, wish.endTime))
+                : seatSlots;
+              if (wish.type === 'specific' && targetSlots.length < 2) return false;
 
-            // 4. 重複時間帯の衝突チェック
-            const hasOverlap = targetSlots.some(slot => staffAssignedSlotsThisDay[s.id].has(slot));
-            if (hasOverlap) return false;
+              // 4. 重複時間帯の衝突チェック（同じ時間に2箇所アサインされるのは物理的に不可）
+              const hasOverlap = targetSlots.some(slot => staffAssignedSlotsThisDay[s.id].has(slot));
+              if (hasOverlap) return false;
 
-            // 5. UNICESは未成年不可
-            if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return false;
+              // 5. UNICESは未成年不可
+              if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return false;
 
-            // 6. 未成年/研修生の相方制約（同一スロットに他の未成年/研修生がいないかチェック）
-            const areaMap = { 'CW': 'cafe', 'FS': 'fs', 'UNICES': 'unices' } as const;
-            const assignArea = areaMap[seat.type];
-            let isPartnerConstraintViolated = false;
-            for (const slot of targetSlots) {
-              const assignedInSlot = slots[slot].filter(a => a.area === assignArea);
-              for (const a of assignedInSlot) {
-                const other = staffs.find(st => st.id === a.staffId);
-                if (!other) continue;
-                if (isMinorOrTrainee(s)) {
-                  if (!isValidPartner(other)) {
-                    isPartnerConstraintViolated = true;
-                    break;
-                  }
-                } else {
-                  if (isMinorOrTrainee(other) && !isValidPartner(s)) {
-                    isPartnerConstraintViolated = true;
-                    break;
-                  }
-                }
+              // --- Phaseごとの個別制約 ---
+
+              // A. 連勤制限
+              // Phase 1 では3連勤以上のスタッフを除外 (Phase 2, 3, 4 で連勤緩和)
+              if (phase === 1) {
+                const consecutiveDays = getConsecutiveDays(s.id, dateStr, generatedList);
+                if (consecutiveDays >= 3) return false;
               }
-              if (isPartnerConstraintViolated) break;
-            }
-            if (isPartnerConstraintViolated) return false;
 
-            return true;
-          });
+              // B. 1日1スロット原則 (通し勤務の制限)
+              // Phase 1, 2 では通し勤務を禁止。Phase 3, 4 でのみ通し勤務を解放
+              if (phase <= 2) {
+                const hasAssignedThisDay = staffAssignedSlotsThisDay[s.id].size > 0;
+                if (hasAssignedThisDay) return false;
+              }
+
+              // C. 未成年/研修生のペア制約
+              // Phase 1, 2, 3 では未成年ペア禁止。Phase 4 でのみ未成年ペアを緩和
+              if (phase <= 3) {
+                const areaMap = { 'CW': 'cafe', 'FS': 'fs', 'UNICES': 'unices' } as const;
+                const assignArea = areaMap[seat.type];
+                let isPartnerConstraintViolated = false;
+                for (const slot of targetSlots) {
+                  const assignedInSlot = slots[slot].filter(a => a.area === assignArea);
+                  for (const a of assignedInSlot) {
+                    const other = staffs.find(st => st.id === a.staffId);
+                    if (!other) continue;
+                    if (isMinorOrTrainee(s)) {
+                      if (!isValidPartner(other)) {
+                        isPartnerConstraintViolated = true;
+                        break;
+                      }
+                    } else {
+                      if (isMinorOrTrainee(other) && !isValidPartner(s)) {
+                        isPartnerConstraintViolated = true;
+                        break;
+                      }
+                    }
+                  }
+                  if (isPartnerConstraintViolated) break;
+                }
+                if (isPartnerConstraintViolated) return false;
+              }
+
+              return true;
+            });
+
+            if (candidates.length > 0) {
+              selectedPhase = phase;
+              break;
+            }
+          }
 
           if (candidates.length === 0) continue;
 
@@ -909,12 +937,24 @@
             if (isWishMatch) {
               score += 100;
             }
+            
+            // 特定時間希望者を優先（蓋閉め処理の前段階として、特定時間を先に埋めるため加点）
+            if (wish.type === 'specific') {
+              score += 200;
+            }
+
             score += incomeGap;
 
             if (consecutiveDays === 2) {
               score -= 50;
             } else if (consecutiveDays >= 3) {
               score -= 1000;
+            }
+
+            // 通し勤務ペナルティ (すでに本日アサインされている場合は減点)
+            const hasAssignedThisDay = staffAssignedSlotsThisDay[s.id].size > 0;
+            if (hasAssignedThisDay) {
+              score -= 800;
             }
 
             return {
@@ -954,6 +994,100 @@
             });
             staffAssignedSlotsThisDay[s.id].add(slot);
           });
+
+          // 【おまかせスタッフの後出し蓋閉め処理】
+          // アサインしたスタッフが「特定時間希望(specific)」で、席の一部のスロットしか埋まらなかった場合
+          const wish = normalizedWishes[s.id];
+          if (wish.type === 'specific') {
+            const remainingSlots = seatSlots.filter(slot => !targetSlots.includes(slot));
+            if (remainingSlots.length >= 1) {
+              // 残りの時間を埋めるため、おまかせスタッフ(free)から候補者を抽出
+              const fillerCandidates = activeStaffsForAuto.filter(st => {
+                if (st.id === s.id) return false;
+                if (!(st.tags ?? []).includes(seat.type)) return false;
+
+                const w = normalizedWishes[st.id];
+                if (w.type !== 'free') return false;
+
+                // 重複時間帯の衝突チェック
+                const hasOverlap = remainingSlots.some(slot => staffAssignedSlotsThisDay[st.id].has(slot));
+                if (hasOverlap) return false;
+
+                // 通し勤務制限 (Phase 3未満では、本日すでにアサインされている人は蓋閉めでも除外)
+                if (selectedPhase <= 2) {
+                  const hasAssigned = staffAssignedSlotsThisDay[st.id].size > 0;
+                  if (hasAssigned) return false;
+                }
+
+                // 未成年ペア制約 (Phase 4未満では未成年ペアをチェック)
+                if (selectedPhase <= 3) {
+                  let isPartnerConstraintViolated = false;
+                  for (const slot of remainingSlots) {
+                    const assignedInSlot = slots[slot].filter(a => a.area === assignArea);
+                    for (const a of assignedInSlot) {
+                      const other = staffs.find(st => st.id === a.staffId);
+                      if (!other) continue;
+                      if (isMinorOrTrainee(st)) {
+                        if (!isValidPartner(other)) {
+                          isPartnerConstraintViolated = true;
+                          break;
+                        }
+                      } else {
+                        if (isMinorOrTrainee(other) && !isValidPartner(st)) {
+                          isPartnerConstraintViolated = true;
+                          break;
+                        }
+                      }
+                    }
+                    if (isPartnerConstraintViolated) break;
+                  }
+                  if (isPartnerConstraintViolated) return false;
+                }
+
+                return true;
+              });
+
+              if (fillerCandidates.length > 0) {
+                // 蓋閉め候補者のスコアリング
+                const scoredFillers = fillerCandidates.map(st => {
+                  const targetIncome = st.target_monthly_income || st.targetIncomeMax || 40000;
+                  const wage = Number(st.hourlyWage || st.hourly_wage) || (st.role === 'employee' ? 1500 : (st.age_group || st.role) === 'adult' ? 1200 : 1100);
+                  const currentHours = (currentAccruedHours[st.id] || 0) + (staffAssignedSlotsThisDay[st.id]?.size || 0) * 0.25;
+                  const currentIncome = currentHours * wage;
+                  const incomeGap = targetIncome - currentIncome;
+
+                  const consecutiveDays = getConsecutiveDays(st.id, dateStr, generatedList);
+
+                  let score = incomeGap;
+                  if (consecutiveDays === 2) score -= 50;
+                  else if (consecutiveDays >= 3) score -= 1000;
+
+                  const hasAssigned = staffAssignedSlotsThisDay[st.id].size > 0;
+                  if (hasAssigned) score -= 800;
+
+                  return {
+                    staff: st,
+                    score
+                  };
+                });
+
+                scoredFillers.sort((a, b) => b.score - a.score);
+                const bestFiller = scoredFillers[0].staff;
+
+                // 蓋閉め実行（残りスロットすべてをアサイン）
+                remainingSlots.forEach(slot => {
+                  slots[slot].push({
+                    staffId: bestFiller.id,
+                    staffName: bestFiller.name,
+                    role: (bestFiller.age_group || bestFiller.role) === 'minor' ? 'minor' : (bestFiller.role === 'employee' ? 'employee' : 'adult'),
+                    area: assignArea,
+                    isRarePinned: false
+                  });
+                  staffAssignedSlotsThisDay[bestFiller.id].add(slot);
+                });
+              }
+            }
+          }
         }
 
         // --- STEP D-0: 未成年/研修生の安全スイープ（ワンオペ・違反ペアの排除） ---
