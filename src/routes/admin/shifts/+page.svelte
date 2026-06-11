@@ -848,19 +848,19 @@
               // 5. UNICESは未成年不可
               if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return false;
 
-              // 6. 厳格な給与上限チェック（1円でも超える場合は強制除外）
+              // 6. 許容バッファ付き給与上限チェック（目標金額+6,000円を超える場合は強制除外）
               // 1日〜24日は絶対除外（上限緩和なし）。25日以降かつ最終フェーズ（Phase 4）のみ上限を超えてのアサインを許可する。
               const wage = Number(s.hourlyWage || s.hourly_wage) || (s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
               const currentHours = (currentAccruedHours[s.id] || 0) + (staffAssignedSlotsThisDay[s.id].size * 0.25);
               const currentEarnedWage = currentHours * wage;
               const expectedWage = currentEarnedWage + (slotHours * wage);
-              const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000);
+              const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000) + 6000; // 許容バッファ+6,000円
 
               const isLateDate = d >= 25;
               const allowOverLimit = isLateDate && phase === 4;
 
               if (!allowOverLimit && expectedWage > maxLimit) {
-                return false; // 上限超過のため強制除外
+                return false; // 上限（バッファ込）超過のため強制除外
               }
 
               // --- Phaseごとの個別制約 ---
@@ -1026,18 +1026,18 @@
                 const w = normalizedWishes[st.id];
                 if (w.type !== 'free') return false;
 
-                // 厳格な給与上限チェック
+                // 許容バッファ付き給与上限チェック
                 const stWage = Number(st.hourlyWage || st.hourly_wage) || (st.role === 'employee' ? 1500 : (st.age_group || st.role) === 'adult' ? 1200 : 1100);
                 const stCurrentHours = (currentAccruedHours[st.id] || 0) + (staffAssignedSlotsThisDay[st.id].size * 0.25);
                 const stCurrentEarnedWage = stCurrentHours * stWage;
                 const stExpectedWage = stCurrentEarnedWage + (remainingSlots.length * 0.25 * stWage);
-                const stMaxLimit = Math.min(st.target_monthly_income || st.targetIncomeMax || 50000, 50000);
+                const stMaxLimit = Math.min(st.target_monthly_income || st.targetIncomeMax || 50000, 50000) + 6000; // 許容バッファ+6,000円
 
                 const isLateDate = d >= 25;
                 const allowOverLimit = isLateDate && selectedPhase === 4;
 
                 if (!allowOverLimit && stExpectedWage > stMaxLimit) {
-                  return false; // 上限超過のため蓋閉め候補から強制除外
+                  return false; // 上限（バッファ込）超過のため蓋閉め候補から強制除外
                 }
 
                 // 重複時間帯の衝突チェック
