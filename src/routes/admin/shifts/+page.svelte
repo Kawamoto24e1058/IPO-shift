@@ -819,6 +819,8 @@
           const seatSlots = TIME_SLOTS.filter(slot => isSlotInInterval(slot, seat.startTime, seat.endTime));
           if (seatSlots.length === 0) continue;
 
+          const slotHours = seatSlots.length * 0.25;
+
           let candidates: Staff[] = [];
           let selectedPhase = 1;
 
@@ -845,6 +847,21 @@
 
               // 5. UNICESは未成年不可
               if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return false;
+
+              // 6. 厳格な給与上限チェック（1円でも超える場合は強制除外）
+              // 1日〜24日は絶対除外（上限緩和なし）。25日以降かつ最終フェーズ（Phase 4）のみ上限を超えてのアサインを許可する。
+              const wage = Number(s.hourlyWage || s.hourly_wage) || (s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
+              const currentHours = (currentAccruedHours[s.id] || 0) + (staffAssignedSlotsThisDay[s.id].size * 0.25);
+              const currentEarnedWage = currentHours * wage;
+              const expectedWage = currentEarnedWage + (slotHours * wage);
+              const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000);
+
+              const isLateDate = d >= 25;
+              const allowOverLimit = isLateDate && phase === 4;
+
+              if (!allowOverLimit && expectedWage > maxLimit) {
+                return false; // 上限超過のため強制除外
+              }
 
               // --- Phaseごとの個別制約 ---
 
@@ -899,7 +916,7 @@
             }
           }
 
-          if (candidates.length === 0) continue;
+          if (candidates.length === 0) continue; // 誰もいなければアサインせず、席を白紙（未充足）のままにする
 
           // 候補者のスコアリング
           const scoredCandidates = candidates.map(s => {
@@ -1008,6 +1025,20 @@
 
                 const w = normalizedWishes[st.id];
                 if (w.type !== 'free') return false;
+
+                // 厳格な給与上限チェック
+                const stWage = Number(st.hourlyWage || st.hourly_wage) || (st.role === 'employee' ? 1500 : (st.age_group || st.role) === 'adult' ? 1200 : 1100);
+                const stCurrentHours = (currentAccruedHours[st.id] || 0) + (staffAssignedSlotsThisDay[st.id].size * 0.25);
+                const stCurrentEarnedWage = stCurrentHours * stWage;
+                const stExpectedWage = stCurrentEarnedWage + (remainingSlots.length * 0.25 * stWage);
+                const stMaxLimit = Math.min(st.target_monthly_income || st.targetIncomeMax || 50000, 50000);
+
+                const isLateDate = d >= 25;
+                const allowOverLimit = isLateDate && selectedPhase === 4;
+
+                if (!allowOverLimit && stExpectedWage > stMaxLimit) {
+                  return false; // 上限超過のため蓋閉め候補から強制除外
+                }
 
                 // 重複時間帯の衝突チェック
                 const hasOverlap = remainingSlots.some(slot => staffAssignedSlotsThisDay[st.id].has(slot));
