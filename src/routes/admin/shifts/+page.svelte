@@ -90,24 +90,12 @@
     y: 0
   });
 
-  // ログインユーザー自身をスタッフ一覧へ動的追加 (テスト用に自希望を反映させるため)
+  // ログインユーザー自身をスタッフ一覧へ反映させるためのトリガー
   $effect(() => {
     if (authState.user && authState.user.uid) {
       const userUid = authState.user.uid;
       const exists = staffs.some(s => s.id === userUid || s.uid === userUid);
       if (!exists) {
-        staffs = [
-          {
-            id: userUid,
-            name: authState.user.name || '自分 (テスト管理者)',
-            role: 'employee',
-            targetIncomeMin: 180000,
-            targetIncomeMax: 250000,
-            hourlyWage: 1500,
-            uid: userUid
-          },
-          ...staffs
-        ];
         loadMonthData();
       }
     }
@@ -592,8 +580,27 @@
     try {
       // 1. 全スタッフ情報を取得
       try {
-        const loaded = await getStaffDetails(staffs);
+        let loaded = await getStaffDetails(staffs);
         if (loaded && loaded.length > 0) {
+          // ログインユーザー自身がロードされたスタッフリストに含まれているか確認し、無ければ追加
+          if (authState.user && authState.user.uid) {
+            const userUid = authState.user.uid;
+            const exists = loaded.some(s => s.id === userUid || s.uid === userUid);
+            if (!exists) {
+              loaded = [
+                {
+                  id: userUid,
+                  name: authState.user.name || '自分 (テスト管理者)',
+                  role: 'employee',
+                  targetIncomeMin: 180000,
+                  targetIncomeMax: 250000,
+                  hourlyWage: 1500,
+                  uid: userUid
+                },
+                ...loaded
+              ];
+            }
+          }
           staffs = loaded;
         }
       } catch (e) {

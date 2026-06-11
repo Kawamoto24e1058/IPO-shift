@@ -53,14 +53,7 @@ service cloud.firestore {
       allow read: if request.auth != null;
       allow write: if request.auth != null && (
         isAdmin(request) ||
-        (wishId.split('_')[0] == request.auth.uid && (
-          // 個別解除されているか、提出前であれば書込可能
-          // wishes ID フォーマット: {userId}_{dateStr} (例: emp_1_2026-05-21)
-          // submittals ID フォーマット: {userId}_{year}_{month} (例: emp_1_2026_05)
-          get(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])).data.isUnlocked == true ||
-          !exists(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])) ||
-          get(/databases/$(database)/documents/submittals/$(wishId.split('_')[0] + '_' + wishId.split('_')[1].split('-')[0] + '_' + wishId.split('_')[1].split('-')[1])).data.isSubmitted == false
-        ))
+        wishId.startsWith(request.auth.uid + "_")
       );
     }
 
