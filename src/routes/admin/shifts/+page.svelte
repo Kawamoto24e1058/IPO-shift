@@ -861,10 +861,27 @@
             if (!(s.tags ?? []).includes(seat.type)) return null;
             if (!wish || wish.type === 'ng') return null;
 
+            // 希望が「おまかせ」か、または希望時間がスロットの時間帯を完全にカバー（包含）しているか
+            const wishStartMin = timeToMinutes(wish.startTime);
+            const wishEndMin = timeToMinutes(wish.endTime);
+            const seatStartMin = timeToMinutes(seat.startTime);
+            const seatEndMin = timeToMinutes(seat.endTime);
+
+            const isCovered = wish.type === 'free' || 
+              (wish.type === 'specific' && wishStartMin <= seatStartMin && wishEndMin >= seatEndMin);
+
+            // Phase 1 と Phase 2 では、「完全にカバーしているスタッフ」のみを候補とする（隙間のないアサインを優先）
+            if (phase <= 2 && !isCovered) return null;
+
+            // 希望時間とスロットの重複部分（働くスロット）を抽出
             const targetSlots = wish.type === 'specific'
               ? seatSlots.filter(slot => isSlotInInterval(slot, wish.startTime, wish.endTime))
               : seatSlots;
-            if (wish.type === 'specific' && targetSlots.length < 2) return null;
+
+            // Phase 3 と Phase 4 では、カバーしていなくても、希望時間とスロットが一部重複（最低30分以上）していれば候補とする（隙間アサインの許容）
+            if (phase >= 3) {
+              if (targetSlots.length < 2) return null;
+            }
 
             const hasOverlap = targetSlots.some(slot => staffAssignedSlotsByDate[dateStr][s.id].has(slot));
             if (hasOverlap) return null;
@@ -872,9 +889,11 @@
             if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return null;
 
             // 厳格な給与上限チェック（目標金額+6,000円）
+            // アサインされる予定の実際の時間（targetSlots.length）に基づいて正確に給与を見積もる
+            const actualAssignHours = targetSlots.length * 0.25;
             const wage = Number(s.hourlyWage || s.hourly_wage) || (s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
             const currentEarnedWage = currentAccruedHours[s.id] * wage;
-            const expectedWage = currentEarnedWage + (slotHours * wage);
+            const expectedWage = currentEarnedWage + (actualAssignHours * wage);
             const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000) + 6000;
 
             const isLateDate = seat.dayNum >= 25;
@@ -920,17 +939,6 @@
             }
 
             // --- スコア計算（並び替え優先度決定用） ---
-            let isWishMatch = false;
-            if (wish.type === 'free') {
-              isWishMatch = true;
-            } else if (wish.type === 'specific') {
-              const wishStartMin = timeToMinutes(wish.startTime);
-              const wishEndMin = timeToMinutes(wish.endTime);
-              const seatStartMin = timeToMinutes(seat.startTime);
-              const seatEndMin = timeToMinutes(seat.endTime);
-              isWishMatch = wishStartMin <= seatStartMin && wishEndMin >= seatEndMin;
-            }
-
             // 困窮度優先： (目標月収) - (現在の確定給与)
             const targetIncome = s.target_monthly_income || s.targetIncomeMax || 40000;
             const incomeGap = targetIncome - currentEarnedWage;
@@ -939,7 +947,7 @@
             const weekendCount = getWeekendShiftCount(s.id);
 
             let score = 0;
-            if (isWishMatch) score += 100;
+            if (isCovered) score += 100;
             if (wish.type === 'specific') score += 200; // 特定時間希望を優先
             score += incomeGap; // 差額が大きい（困窮している）ほどスコアが高くなる
 
@@ -982,7 +990,14 @@
           const areaMap = { 'CW': 'cafe', 'FS': 'fs', 'UNICES': 'unices' } as const;
           const assignArea = areaMap[seat.type];
 
-          assignedTargetSlots.forEach(slot => {
+          // 席をカバーしている場合はスロット全体、部分一致（Phase 3,4）の場合は重複スロットのみアサイン
+          const wish = normalizedWishes[assignedStaff.id];
+          const isCovered = wish.type === 'free' || 
+            (wish.type === 'specific' && timeToMinutes(wish.startTime) <= timeToMinutes(seat.startTime) && timeToMinutes(wish.endTime) >= timeToMinutes(seat.endTime));
+
+          const finalAssignSlots = isCovered ? seatSlots : assignedTargetSlots;
+
+          finalAssignSlots.forEach(slot => {
             newShiftsMap[dateStr].slots[slot].push({
               staffId: assignedStaff!.id,
               staffName: assignedStaff!.name,
@@ -994,12 +1009,12 @@
           });
 
           const wage = Number(assignedStaff.hourlyWage || assignedStaff.hourly_wage) || (assignedStaff.role === 'employee' ? 1500 : (assignedStaff.age_group || assignedStaff.role) === 'adult' ? 1200 : 1100);
-          currentAccruedHours[assignedStaff.id] += assignedTargetSlots.length * 0.25;
+          currentAccruedHours[assignedStaff.id] += finalAssignSlots.length * 0.25;
 
           // 【おまかせスタッフの後出し蓋閉め処理】
-          const wish = normalizedWishes[assignedStaff.id];
-          if (wish.type === 'specific') {
-            const remainingSlots = seatSlots.filter(slot => !assignedTargetSlots.includes(slot));
+          // 部分一致（隙間アサイン）によって生じた余り時間を、おまかせスタッフで穴埋め
+          if (!isCovered) {
+            const remainingSlots = seatSlots.filter(slot => !finalAssignSlots.includes(slot));
             if (remainingSlots.length >= 1) {
               const fillerCandidates = activeStaffsForAuto.filter(st => {
                 if (st.id === assignedStaff!.id) return false;
