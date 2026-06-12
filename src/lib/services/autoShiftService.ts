@@ -11,6 +11,7 @@ export interface Staff {
   targetIncomeMin?: number; // 希望月収（下限）
   targetIncomeMax?: number; // 希望月収（上限）
   target_monthly_income?: number; // 目標希望月収
+  max_monthly_income?: number;    // 絶対上限月収
   hourlyWage?: number;      // 時給
   hourly_wage?: number;     // 時給
   notion_person_id?: string; // Notionユーザー一意のUUID (Person属性マッピング用)

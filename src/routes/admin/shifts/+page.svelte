@@ -25,23 +25,23 @@
 
   // 1. 実務スタッフデータ（17名） — CW / FS / UNICESタグ付き
   let staffs = $state<Staff[]>([
-    { id: 'staff_01', uid: 'staff_01', name: '川本(管理者)', role: 'employee', hourlyWage: 1200, hourly_wage: 1200, targetIncomeMax: 50000, target_monthly_income: 50000, targetIncomeMin: 0, tags: ['CW', 'FS', 'UNICES'], age_group: 'adult' },
-    { id: 'staff_02', uid: 'staff_02', name: '佐藤', role: 'employee', hourlyWage: 1100, hourly_wage: 1100, targetIncomeMax: 50000, target_monthly_income: 50000, targetIncomeMin: 0, tags: ['CW', 'FS'], age_group: 'adult' },
-    { id: 'staff_03', uid: 'staff_03', name: '田中', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, targetIncomeMax: 45000, target_monthly_income: 45000, targetIncomeMin: 0, tags: ['CW', 'FS'], age_group: 'adult' },
-    { id: 'staff_04', uid: 'staff_04', name: '山本', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, targetIncomeMax: 40000, target_monthly_income: 40000, targetIncomeMin: 0, tags: ['CW', 'UNICES'], age_group: 'adult' },
-    { id: 'staff_05', uid: 'staff_05', name: '鈴木', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 35000, target_monthly_income: 35000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor', is_trainee: true },
-    { id: 'staff_06', uid: 'staff_06', name: '高橋', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 30000, target_monthly_income: 30000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor', isTrainee: true },
-    { id: 'staff_07', uid: 'staff_07', name: '渡辺', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, targetIncomeMax: 40000, target_monthly_income: 40000, targetIncomeMin: 0, tags: ['CW', 'FS'], age_group: 'adult' },
-    { id: 'staff_08', uid: 'staff_08', name: '伊藤', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 35000, target_monthly_income: 35000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_09', uid: 'staff_09', name: '中村', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 30000, target_monthly_income: 30000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_10', uid: 'staff_10', name: '小林', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 40000, target_monthly_income: 40000, targetIncomeMin: 0, tags: ['CW'], age_group: 'adult' },
-    { id: 'staff_11', uid: 'staff_11', name: '加藤', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 35000, target_monthly_income: 35000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_12', uid: 'staff_12', name: '吉田', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 30000, target_monthly_income: 30000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_13', uid: 'staff_13', name: '山田', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, targetIncomeMax: 40000, target_monthly_income: 40000, targetIncomeMin: 0, tags: ['CW', 'FS'], age_group: 'adult' },
-    { id: 'staff_14', uid: 'staff_14', name: '佐々木', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 35000, target_monthly_income: 35000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_15', uid: 'staff_15', name: '山口', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 30000, target_monthly_income: 30000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_16', uid: 'staff_16', name: '松本', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 25000, target_monthly_income: 25000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor' },
-    { id: 'staff_17', uid: 'staff_17', name: '井上', role: 'staff', hourlyWage: 980, hourly_wage: 980, targetIncomeMax: 25000, target_monthly_income: 25000, targetIncomeMin: 0, tags: ['CW'], age_group: 'minor', isLateSubmission: true }
+    { id: 'staff_01', uid: 'staff_01', name: '川本(管理者)', role: 'employee', hourlyWage: 1200, hourly_wage: 1200, target_monthly_income: 50000, max_monthly_income: 80000, tags: ['CW', 'FS', 'UNICES'], age_group: 'adult' },
+    { id: 'staff_02', uid: 'staff_02', name: '佐藤', role: 'employee', hourlyWage: 1100, hourly_wage: 1100, target_monthly_income: 50000, max_monthly_income: 80000, tags: ['CW', 'FS'], age_group: 'adult' },
+    { id: 'staff_03', uid: 'staff_03', name: '田中', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, target_monthly_income: 45000, max_monthly_income: 70000, tags: ['CW', 'FS'], age_group: 'adult' },
+    { id: 'staff_04', uid: 'staff_04', name: '山本', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, target_monthly_income: 40000, max_monthly_income: 70000, tags: ['CW', 'UNICES'], age_group: 'adult' },
+    { id: 'staff_05', uid: 'staff_05', name: '鈴木', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 35000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor', is_trainee: true },
+    { id: 'staff_06', uid: 'staff_06', name: '高橋', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 30000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor', isTrainee: true },
+    { id: 'staff_07', uid: 'staff_07', name: '渡辺', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, target_monthly_income: 40000, max_monthly_income: 70000, tags: ['CW', 'FS'], age_group: 'adult' },
+    { id: 'staff_08', uid: 'staff_08', name: '伊藤', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 35000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_09', uid: 'staff_09', name: '中村', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 30000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_10', uid: 'staff_10', name: '小林', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 40000, max_monthly_income: 70000, tags: ['CW'], age_group: 'adult' },
+    { id: 'staff_11', uid: 'staff_11', name: '加藤', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 35000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_12', uid: 'staff_12', name: '吉田', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 30000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_13', uid: 'staff_13', name: '山田', role: 'staff', hourlyWage: 1000, hourly_wage: 1000, target_monthly_income: 40000, max_monthly_income: 70000, tags: ['CW', 'FS'], age_group: 'adult' },
+    { id: 'staff_14', uid: 'staff_14', name: '佐々木', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 35000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_15', uid: 'staff_15', name: '山口', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 30000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_16', uid: 'staff_16', name: '松本', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 25000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor' },
+    { id: 'staff_17', uid: 'staff_17', name: '井上', role: 'staff', hourlyWage: 980, hourly_wage: 980, target_monthly_income: 25000, max_monthly_income: 70000, tags: ['CW'], age_group: 'minor', isLateSubmission: true }
   ]);
 
   // 2. カレンダー年月選択状態 (デフォルトは募集対象月である翌月に自動スライド)
@@ -917,11 +917,21 @@
           // 困窮度： (目標月収) - (現在の確定給与)
           const wage = Number(s.hourlyWage || s.hourly_wage) || (s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
           const currentEarnedWage = currentAccruedHours[s.id] * wage;
-          const targetIncome = s.target_monthly_income || s.targetIncomeMax || 40000;
+          const targetIncome = s.target_monthly_income || 50000;
           const incomeGap = targetIncome - currentEarnedWage;
 
           const consecutiveDays = getConsecutiveDays(s.id, dateStr);
           const weekendCount = getWeekendShiftCount(s.id);
+
+          // 予想支給額の計算
+          const actualAssignHours = targetSlots.length * 0.25;
+          const expectedWage = currentEarnedWage + (actualAssignHours * wage);
+
+          // --- 1.2 max_monthly_income による「絶対上限フィルター」（一般バイトのみ） ---
+          const absoluteLimit = s.max_monthly_income || 70000;
+          if (s.role !== 'employee' && expectedWage > absoluteLimit) {
+            return null; // 上限を1円でも超える場合は強制除外
+          }
 
           // 社員（employee）の困窮度はウェイトを10分の1に引き下げる
           let score = s.role === 'employee' ? incomeGap * 0.1 : incomeGap;
@@ -950,14 +960,11 @@
             score -= 3000;
           }
 
-          // D. 【目標金額のストッパー】: 予想支給額が「目標額 ＋ 6,000円」のラインを超えるなら -200000点
+          // D. 【希望月収のストッパー】: 予想支給額が「希望月収」のラインを超えるなら -200000点
           // (※一般バイトのみ対象とし、25日以降の遅延日程はペナルティ対象外とする)
-          const actualAssignHours = targetSlots.length * 0.25;
-          const expectedWage = currentEarnedWage + (actualAssignHours * wage);
-          const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000) + 6000;
           const isLateDate = seat.dayNum >= 25;
 
-          if (s.role !== 'employee' && !isLateDate && expectedWage > maxLimit) {
+          if (s.role !== 'employee' && !isLateDate && expectedWage > targetIncome) {
             score -= 200000;
           }
 
@@ -1022,11 +1029,11 @@
                 const stWage = Number(st.hourlyWage || st.hourly_wage) || (st.role === 'employee' ? 1500 : (st.age_group || st.role) === 'adult' ? 1200 : 1100);
                 const stCurrentEarnedWage = currentAccruedHours[st.id] * stWage;
                 const stExpectedWage = stCurrentEarnedWage + (remainingSlots.length * 0.25 * stWage);
-                const stMaxLimit = Math.min(st.target_monthly_income || st.targetIncomeMax || 50000, 50000) + 6000;
+                const stMaxLimit = st.max_monthly_income || 70000;
 
                 const isLateDate = seat.dayNum >= 25;
-                // 一般バイト（staff）のみ上限超過フィルターを適用
-                if (st.role !== 'employee' && !isLateDate && stExpectedWage > stMaxLimit) return false;
+                // 一般バイト（staff）のみ絶対上限超過フィルターを適用（7万円）
+                if (st.role !== 'employee' && stExpectedWage > stMaxLimit) return false;
 
                 const hasOverlap = remainingSlots.some(slot => staffAssignedSlotsByDate[dateStr][st.id].has(slot));
                 if (hasOverlap) return false;
@@ -1036,7 +1043,7 @@
 
               if (fillerCandidates.length > 0) {
                 const scoredFillers = fillerCandidates.map(st => {
-                  const targetIncome = st.target_monthly_income || st.targetIncomeMax || 40000;
+                  const targetIncome = st.target_monthly_income || 50000;
                   const wage = Number(st.hourlyWage || st.hourly_wage) || (st.role === 'employee' ? 1500 : (st.age_group || st.role) === 'adult' ? 1200 : 1100);
                   const stCurrentEarnedWage = currentAccruedHours[st.id] * wage;
                   const incomeGap = targetIncome - stCurrentEarnedWage;
@@ -1049,6 +1056,13 @@
                   // 一般バイトには +100000点加算
                   if (st.role !== 'employee') {
                     score += 100000;
+                  }
+
+                  // 希望月収ストッパー減点
+                  const isLateDate = seat.dayNum >= 25;
+                  const stExpectedWage = stCurrentEarnedWage + (remainingSlots.length * 0.25 * wage);
+                  if (st.role !== 'employee' && !isLateDate && stExpectedWage > targetIncome) {
+                    score -= 200000;
                   }
 
                   if (consecutiveDays >= 3) score -= 5000; // 連勤ペナルティ
@@ -1722,21 +1736,16 @@
 
   // 給与ステータスのクラス選定
   function getWageStatus(expected: number, s: Staff): { label: string; class: string } {
-    if (s.role !== 'employee') {
-      if (expected < 30000) {
-        return { label: '要調整 (3万未満) ⚠️', class: 'bg-amber-50 text-amber-700 border-amber-250 font-bold' };
-      } else if (expected >= 50000) {
-        return { label: '超過注意 (5万以上) 🚨', class: 'bg-rose-50 text-rose-700 border-rose-250 font-bold animate-pulse' };
-      } else {
-        return { label: '適正 ✅', class: 'bg-emerald-50 text-emerald-700 border-emerald-250 font-semibold' };
-      }
+    const targetIncome = s.target_monthly_income || 50000;
+    const absoluteLimit = s.max_monthly_income || (s.role === 'employee' ? 80000 : 70000);
+
+    if (expected < targetIncome) {
+      return { label: '目標未満 ⚠️', class: 'bg-amber-50 text-amber-700 border-amber-250 font-bold' };
+    } else if (expected > absoluteLimit) {
+      return { label: '上限超過 🚨', class: 'bg-rose-50 text-rose-700 border-rose-250 font-bold animate-pulse' };
+    } else {
+      return { label: '適正 ✅', class: 'bg-emerald-50 text-emerald-700 border-emerald-250 font-semibold' };
     }
-    const minVal = Number(s.targetIncomeMin) || 40000;
-    const maxVal = Number(s.targetIncomeMax) || 40000;
-    if (minVal === 0 && maxVal === 0) return { label: '未設定', class: 'bg-slate-100 text-slate-600 border-slate-200' };
-    if (expected < minVal) return { label: '不足 ⚠️', class: 'bg-amber-50 text-amber-700 border-amber-200 font-bold' };
-    if (expected > maxVal) return { label: '過剰 🚨', class: 'bg-rose-50 text-rose-700 border-rose-250 font-bold animate-pulse' };
-    return { label: '適正 ✅', class: 'bg-emerald-50 text-emerald-700 border-emerald-250 font-semibold' };
   }
 
   // 初期化ロード
@@ -2020,10 +2029,8 @@
                 {@const hours = staffTotalHours[s.id] || 0}
                 {@const status = getWageStatus(expected, s)}
                 
-                {@const staffTargetMin = (s.targetIncomeMin && Number(s.targetIncomeMin) > 0) ? Number(s.targetIncomeMin) : 40000}
-                {@const staffTargetMax = (s.targetIncomeMax && Number(s.targetIncomeMax) > 0) ? Number(s.targetIncomeMax) : 40000}
-                {@const targetMid = s.role !== 'employee' ? 50000 : ((staffTargetMin + staffTargetMax) / 2)}
-                {@const percent = targetMid > 0 ? Math.min(100, Math.round((expected / targetMid) * 100)) : 0}
+                {@const targetIncome = s.target_monthly_income || 50000}
+                {@const percent = targetIncome > 0 ? Math.min(100, Math.round((expected / targetIncome) * 100)) : 0}
                 
                 <div class="bg-slate-50 p-3 rounded-2xl border border-slate-200/50 space-y-2.5 transition hover:bg-white duration-300 shadow-[0_1px_3px_rgba(0,0,0,0.01)]">
                   <!-- スタッフ名と状況バッジ -->
@@ -2044,19 +2051,15 @@
                       <span class="font-extrabold text-slate-900">{expected.toLocaleString()}円</span>
                     </div>
                     <div class="text-right">
-                      <span class="text-slate-400 block font-medium scale-90 origin-right">目標範囲</span>
+                      <span class="text-slate-400 block font-medium scale-90 origin-right">希望 / 上限</span>
                       <span class="font-semibold text-slate-600">
-                        {#if s.role !== 'employee'}
-                          3万〜5万
-                        {:else}
-                          {staffTargetMin.toLocaleString()}〜{staffTargetMax.toLocaleString()}
-                        {/if}
+                        {targetIncome.toLocaleString()}円 / {(s.max_monthly_income || (s.role === 'employee' ? 80000 : 70000)).toLocaleString()}円
                       </span>
                     </div>
                   </div>
 
                   <!-- プログレスバー -->
-                  {#if targetMid > 0}
+                  {#if targetIncome > 0}
                     <div class="space-y-1 font-sans">
                       <div class="flex justify-between text-[8px] text-slate-455 font-bold uppercase tracking-wider scale-90 origin-left">
                         <span>進捗率</span>
@@ -2176,18 +2179,18 @@
                       />
                     </div>
                     <div>
-                      <span class="text-slate-400 block mb-0.5 scale-90 origin-left">希望下限</span>
+                      <span class="text-slate-400 block mb-0.5 scale-90 origin-left">希望月収</span>
                       <input 
                         type="number" 
-                        bind:value={s.targetIncomeMin}
+                        bind:value={s.target_monthly_income}
                         class="w-full bg-white border border-slate-200 rounded-md px-1.5 py-1 text-slate-700 font-bold focus:outline-none focus:border-slate-350"
                       />
                     </div>
                     <div>
-                      <span class="text-slate-400 block mb-0.5 scale-90 origin-left">希望上限</span>
+                      <span class="text-slate-400 block mb-0.5 scale-90 origin-left">絶対上限</span>
                       <input 
                         type="number" 
-                        bind:value={s.targetIncomeMax}
+                        bind:value={s.max_monthly_income}
                         class="w-full bg-white border border-slate-200 rounded-md px-1.5 py-1 text-slate-700 font-bold focus:outline-none focus:border-slate-350"
                       />
                     </div>
