@@ -564,9 +564,7 @@
     const currentMonth = targetMonth;
     const currentUserId = userId;
 
-    const templatesPromise = forceFetchTemplates 
-      ? getWeeklyTemplates(currentUserId).catch(() => weeklyTemplates)
-      : Promise.resolve(weeklyTemplates);
+    const templatesPromise = getWeeklyTemplates(currentUserId).catch(() => weeklyTemplates);
 
     Promise.all([
       templatesPromise,

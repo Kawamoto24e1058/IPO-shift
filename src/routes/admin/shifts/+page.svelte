@@ -20,7 +20,7 @@
     getMonthlyConfirmedShifts
   } from '$lib/services/shiftService';
   import { authState } from '../../../lib/services/authService.svelte.ts';
-  import { doc, collection, query, where, getDocs, writeBatch, Timestamp } from 'firebase/firestore';
+  import { doc, collection, query, where, getDocs, writeBatch, Timestamp, getDoc, setDoc } from 'firebase/firestore';
   import { db } from '$lib/firebase';
 
   // 1. 実務スタッフデータ（17名） — CW / FS / UNICESタグ付き
@@ -578,6 +578,28 @@
   async function loadMonthData() {
     isLoading = true;
     try {
+      // 0. UNICES & FS の日程固定設定をロード
+      try {
+        const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+        const snap = await getDoc(doc(db, 'system_matrix_settings', docId));
+        if (snap.exists()) {
+          const data = snap.data();
+          unicesEventsByDate = data.unicesEvents || {};
+          fsDaysByDate = data.fsDays || {};
+          console.log('[Matrix Settings] Loaded custom UNICES & FS settings from Firestore.');
+        } else {
+          // 保存データがない場合のみ初期デフォルト設定を適用
+          initUnicesEvents(currentYear, currentMonth);
+          initFsDays(currentYear, currentMonth);
+          // 初回デフォルト状態を自動保存
+          await saveUnicesAndFsSettings();
+        }
+      } catch (e) {
+        console.warn('Failed to load matrix settings from DB:', e);
+        initUnicesEvents(currentYear, currentMonth);
+        initFsDays(currentYear, currentMonth);
+      }
+
       // 1. 全スタッフ情報を取得
       try {
         let loaded = await getStaffDetails(staffs);
@@ -639,8 +661,6 @@
       currentMonth -= 1;
     }
     popoverState.isOpen = false;
-    initUnicesEvents(currentYear, currentMonth);
-    initFsDays(currentYear, currentMonth);
     await loadMonthData();
   }
 
@@ -653,12 +673,10 @@
       currentMonth += 1;
     }
     popoverState.isOpen = false;
-    initUnicesEvents(currentYear, currentMonth);
-    initFsDays(currentYear, currentMonth);
     await loadMonthData();
   }
 
-  function triggerMonthlyAutoGenerate() {
+  async function triggerMonthlyAutoGenerate() {
     isLoading = true;
     try {
       const year = currentYear;
@@ -1169,6 +1187,9 @@
 
       // Svelteが再描画を確実に検知できるよう、再代入を実行して一瞬で即時再描画させる！
       monthlyConfirmedShifts = { ...newShiftsMap };
+
+      // 自動生成完了後、自動で一括保存を実行する
+      await handleSaveAllMonthlyShifts();
     } catch (e) {
       console.error('Error generating monthly shifts:', e);
     } finally {
@@ -1301,6 +1322,7 @@
 
     monthlyConfirmedShifts[dateStr] = { ...shift, slots: slotsCopy };
     monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+    saveSingleDailyShift(dateStr);
   }
 
   /**
@@ -1351,6 +1373,7 @@
       unassignedStaffs: unassignedCopy
     };
     monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+    saveSingleDailyShift(dateStr);
   }
 
   /**
@@ -1438,6 +1461,7 @@
       unassignedStaffs: unassignedCopy
     };
     monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+    saveSingleDailyShift(dateStr);
   }
 
   // ポップオーバー内でのスタッフのアサイン切替トグル（ディープコピー不変マージ・即時再描画）
@@ -1498,6 +1522,7 @@
     // 辞書オブジェクト自体と該当日のオブジェクトを再代入し、Svelteに即時検知・描画させる！
     monthlyConfirmedShifts[dateStr] = { ...shift, slots: slotsCopy };
     monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+    saveSingleDailyShift(dateStr);
   }
 
   // 直接テキスト変更時のインライン処理（ディープコピー不変マージ・即時再描画）
@@ -1526,6 +1551,7 @@
       });
       monthlyConfirmedShifts[dateStr] = { ...shift, slots: slotsCopy };
       monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+      saveSingleDailyShift(dateStr);
       return;
     }
 
@@ -1552,6 +1578,7 @@
 
     monthlyConfirmedShifts[dateStr] = { ...shift, slots: slotsCopy };
     monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+    saveSingleDailyShift(dateStr);
   }
 
   // 時間テキストを綺麗にパースする
@@ -1607,6 +1634,9 @@
 
       await batch.commit();
 
+      // 固定設定（UNICES/FS日程）も同時に一括保存
+      await saveUnicesAndFsSettings();
+
       // バックグラウンドで Notion バックアップを並行トリガー
       isSyncingNotion = true;
       Promise.all(
@@ -1648,6 +1678,49 @@
       }, 3000);
     } catch (err) {
       console.error('Error saving staff details:', err);
+    }
+  }
+
+  // UNICES & FS日程の永続化
+  async function saveUnicesAndFsSettings() {
+    try {
+      const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+      const docRef = doc(db, 'system_matrix_settings', docId);
+      await setDoc(docRef, {
+        unicesEvents: unicesEventsByDate || {},
+        fsDays: fsDaysByDate || {},
+        updatedAt: Timestamp.now()
+      }, { merge: true });
+      console.log('[Matrix Settings] Successfully saved UNICES & FS schedule to Firestore.');
+    } catch (e) {
+      console.error('Failed to save matrix settings:', e);
+    }
+  }
+
+  // 特定の日付のシフトのみを自動即時保存するヘルパー
+  async function saveSingleDailyShift(dateStr: string) {
+    const shift = monthlyConfirmedShifts[dateStr];
+    if (shift) {
+      try {
+        const docRef = doc(db, 'confirmed_shifts', dateStr);
+        await setDoc(docRef, {
+          date: shift.date,
+          slots: shift.slots || {},
+          updatedAt: Timestamp.now()
+        });
+        
+        // バックグラウンドで Notion に同期 (awaitせず実行)
+        if (shift.slots) {
+          const hasAssignments = Object.values(shift.slots).some(arr => arr && arr.length > 0);
+          if (hasAssignments) {
+            backupToNotion(shift).catch(err => {
+              console.warn('[Notion Sync] Daily background backup failed:', err);
+            });
+          }
+        }
+      } catch (e) {
+        console.error('Failed to auto-save daily shift:', e);
+      }
     }
   }
 
@@ -1750,8 +1823,6 @@
 
   // 初期化ロード
   onMount(async () => {
-    initUnicesEvents(currentYear, currentMonth);
-    initFsDays(currentYear, currentMonth);
     await loadMonthData();
   });
 </script>
@@ -2111,6 +2182,7 @@
                           <input 
                             type="checkbox" 
                             bind:checked={event.active}
+                            onchange={saveUnicesAndFsSettings}
                             class="sr-only peer"
                           />
                           <div class="w-7 h-4 bg-slate-250 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-indigo-600"></div>
@@ -2124,6 +2196,7 @@
                             <input 
                               type="time" 
                               bind:value={event.startTime}
+                              onchange={saveUnicesAndFsSettings}
                               class="w-full bg-white border border-slate-200 rounded-md px-1.5 py-0.5 text-slate-700 font-bold focus:outline-none focus:border-slate-355"
                             />
                           </div>
@@ -2132,6 +2205,7 @@
                             <input 
                               type="time" 
                               bind:value={event.endTime}
+                              onchange={saveUnicesAndFsSettings}
                               class="w-full bg-white border border-slate-200 rounded-md px-1.5 py-0.5 text-slate-700 font-bold focus:outline-none focus:border-slate-355"
                             />
                           </div>
