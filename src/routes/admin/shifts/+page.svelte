@@ -3,12 +3,9 @@
 	import { onMount } from 'svelte';
 	import {
 		type Staff,
-		type UnicesEvent,
 		type DailyShift,
 		type ShiftAssignment,
 		TIME_SLOTS,
-		generateDailyShift,
-		isStaffAvailable,
 		parseDayOfWeek,
 		normalizeWish
 	} from '$lib/services/autoShiftService';
@@ -1163,23 +1160,26 @@
 				);
 				if (seatSlots.length === 0) continue;
 
-				const slotHours = seatSlots.length * 0.25;
+				const areaMap = { CW: 'cafe', FS: 'fs', UNICES: 'unices' } as const;
+				const assignArea = areaMap[seat.type];
 
-				let assignedStaff: Staff | null = null;
-				let assignedTargetSlots: string[] = [];
-
-				// 候補者全員のスコアリングとフィルタリングを1回で実行
+				// 候補者全員のスコアリングとフィルタリングを実行
 				const scoredCandidates = activeStaffsForAuto
 					.map((s) => {
 						const wish = normalizedWishes[s.id];
 
-						// --- 1. 絶対制約（これらは絶対に除外して null を返す） ---
+						// ==========================================
+						// Phase 2: 絶対制約（ハードフィルター）
+						// ==========================================
 
 						// 役割タグが一致しているか
 						if (!(s.tags ?? []).includes(seat.type)) return null;
 
-						// 休み希望（NG）を出しているか
+						// スタッフが「NG（休み希望）」を出している
 						if (!wish || wish.type === 'ng') return null;
+
+						// 遅延要望 (isLateSubmission: true) である
+						if (s.isLateSubmission) return null;
 
 						// UNICESは未成年不可
 						if (seat.type === 'UNICES' && (s.age_group || s.role) === 'minor') return null;
@@ -1190,8 +1190,7 @@
 								? seatSlots.filter((slot) => isSlotInInterval(slot, wish.startTime, wish.endTime))
 								: seatSlots;
 
-						// 最低30分以上（2スロット以上）重なっていない場合は除外
-						if (targetSlots.length < 2) return null;
+						if (targetSlots.length === 0) return null;
 
 						// 重複時間帯の衝突チェック（同じ時間の別のアサインと被っている場合は絶対不可）
 						const hasOverlap = targetSlots.some((slot) =>
@@ -1199,36 +1198,62 @@
 						);
 						if (hasOverlap) return null;
 
-						// 研修生・未成年同士のペア（違反ペア）回避の絶対チェック
-						const areaMap = { CW: 'cafe', FS: 'fs', UNICES: 'unices' } as const;
-						const assignArea = areaMap[seat.type];
-						let isPartnerConstraintViolated = false;
-						for (const slot of targetSlots) {
-							const assignedInSlot = newShiftsMap[dateStr].slots[slot].filter(
-								(a) => a.area === assignArea
-							);
-							for (const a of assignedInSlot) {
-								const other = staffs.find((st) => st.id === a.staffId);
-								if (!other) continue;
-								if (isMinorOrTrainee(s)) {
-									if (!isValidPartner(other)) {
-										isPartnerConstraintViolated = true;
-										break;
-									}
-								} else {
-									if (isMinorOrTrainee(other) && !isValidPartner(s)) {
-										isPartnerConstraintViolated = true;
+						// カフェ枠において、研修生や未成年同士のペアになる組み合わせを強制除外
+						if (assignArea === 'cafe' && isMinorOrTrainee(s)) {
+							let hasConflictPartner = false;
+							for (const slot of targetSlots) {
+								const assignedInSlot = newShiftsMap[dateStr].slots[slot].filter(
+									(a) => a.area === 'cafe'
+								);
+								for (const a of assignedInSlot) {
+									const other = staffs.find((st) => st.id === a.staffId);
+									if (other && isMinorOrTrainee(other)) {
+										hasConflictPartner = true;
 										break;
 									}
 								}
+								if (hasConflictPartner) break;
 							}
-							if (isPartnerConstraintViolated) break;
+							if (hasConflictPartner) return null;
 						}
-						if (isPartnerConstraintViolated) return null;
 
-						// --- 2. スコア計算とペナルティ（減点）適用 ---
+						// 計算用の時給取得
+						const wage =
+							Number(s.hourlyWage || s.hourly_wage) ||
+							(s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
+						const currentEarnedWage = currentAccruedHours[s.id] * wage;
 
-						// 希望が「おまかせ」か、または希望時間がスロットの時間を完全にカバー（包含）しているか
+						// アサイン時の予定給与額チェック
+						const actualAssignHours = targetSlots.length * 0.25;
+						const expectedWage = currentEarnedWage + actualAssignHours * wage;
+
+						// 上限給の盾：今回のシフトに入った場合の予想支給額が絶対上限月収（max_monthly_income）を超える場合
+						const absoluteLimit = s.max_monthly_income || 70000;
+						if (s.role !== 'employee' && expectedWage > absoluteLimit) {
+							return null; // 一般バイトのみ適用、1円でも超える場合は強制除外
+						}
+
+						// ==========================================
+						// Phase 3: 5大・優先スコアリング（ソフトルール）
+						// ==========================================
+						let score = 0;
+
+						// 1. 【希望給への困窮度（最優先）】
+						// role === 'staff' (一般バイト) の場合のみ、 (target_monthly_income - 現在の確定給与) * 10 を加算
+						if (s.role === 'staff') {
+							const targetIncome = s.target_monthly_income || 50000;
+							const incomeGap = targetIncome - currentEarnedWage;
+							score += incomeGap * 10;
+						}
+
+						// 2. 【最低連続勤務時間の保証】
+						// 重複する希望時間が 3時間（12スロット）未満になる配置は、-10000点
+						if (targetSlots.length < 12) {
+							score -= 10000;
+						}
+
+						// 3. 【希望日時マッチ】
+						// 希望がスロット時間をピタッと内包している場合、+100点
 						const wishStartMin = timeToMinutes(wish.startTime);
 						const wishEndMin = timeToMinutes(wish.endTime);
 						const seatStartMin = timeToMinutes(seat.startTime);
@@ -1240,227 +1265,79 @@
 								wishStartMin <= seatStartMin &&
 								wishEndMin >= seatEndMin);
 
-						// 困窮度： (目標月収) - (現在の確定給与)
-						const wage =
-							Number(s.hourlyWage || s.hourly_wage) ||
-							(s.role === 'employee' ? 1500 : (s.age_group || s.role) === 'adult' ? 1200 : 1100);
-						const currentEarnedWage = currentAccruedHours[s.id] * wage;
-						const targetIncome = s.target_monthly_income || 50000;
-						const incomeGap = targetIncome - currentEarnedWage;
-
-						const consecutiveDays = getConsecutiveDays(s.id, dateStr);
-						const weekendCount = getWeekendShiftCount(s.id);
-
-						// 予想支給額の計算
-						const actualAssignHours = targetSlots.length * 0.25;
-						const expectedWage = currentEarnedWage + actualAssignHours * wage;
-
-						// --- 1.2 max_monthly_income による「絶対上限フィルター」（一般バイトのみ） ---
-						const absoluteLimit = s.max_monthly_income || 70000;
-						if (s.role !== 'employee' && expectedWage > absoluteLimit) {
-							return null; // 上限を1円でも超える場合は強制除外
-						}
-
-						// 社員（employee）の困窮度はウェイトを10分の1に引き下げる
-						let score = s.role === 'employee' ? incomeGap * 0.1 : incomeGap;
-
-						// A-1. 【一般バイト最優先アサイン】: 一般バイト（staff）には +100000点
-						if (s.role !== 'employee') {
-							score += 100000;
-						}
-
-						// A-2. 希望日時マッチ（カバーしていれば大幅加点で最優先）
 						if (isCovered) {
-							score += 50000;
-						}
-						if (wish.type === 'specific') {
-							score += 200; // 特定時間希望をわずかに優先
+							score += 100;
 						}
 
-						// B. 【4連勤以上の抑止】: 連勤数が3日（次で4連勤目）以上なら -5000点
+						// 4. 【異常な連勤抑制】
+						// 4連勤目以上になる場合は -5000点
+						const consecutiveDays = getConsecutiveDays(s.id, dateStr);
 						if (consecutiveDays >= 3) {
 							score -= 5000;
 						}
 
-						// C. 【通し勤務の抑制】: 同日にすでに別スロットのアサインがあるなら -3000点
+						// 5. 【通し勤務抑制】
+						// 同じ日にすでに別スロットにアサイン済みの場合は -3000点
 						const hasAssignedThisDay = staffAssignedSlotsByDate[dateStr][s.id].size > 0;
 						if (hasAssignedThisDay) {
 							score -= 3000;
 						}
 
-						// D. 【希望月収のストッパー】: 予想支給額が「希望月収」のラインを超えるなら -200000点
-						// (※一般バイトのみ対象とし、25日以降の遅延日程はペナルティ対象外とする)
-						const isLateDate = seat.dayNum >= 25;
-
-						if (s.role !== 'employee' && !isLateDate && expectedWage > targetIncome) {
-							score -= 200000;
-						}
+						// 土日出勤数とアサイン用の情報を格納して返却
+						const weekendCount = getWeekendShiftCount(s.id);
 
 						return {
 							staff: s,
 							score,
 							weekendCount,
 							targetSlots,
-							isCovered
+							isCovered,
+							wage,
+							actualAssignHours
 						};
 					})
 					.filter((c): c is NonNullable<typeof c> => c !== null);
 
-				// 最も優秀な候補者を決定
-				if (scoredCandidates.length > 0) {
-					// ランダム性を担保するためにシャッフル
-					const shuffled = shuffle(scoredCandidates);
-					// ソート：スコア（降順） -> 土日出勤回数（昇順）
-					shuffled.sort((a, b) => {
-						if (a.score !== b.score) {
-							return b.score - a.score;
-						}
-						return a.weekendCount - b.weekendCount;
-					});
-
-					const best = shuffled[0];
-					const assignedStaff = best.staff;
-					const assignedTargetSlots = best.targetSlots;
-					const isCovered = best.isCovered;
-
-					const areaMap = { CW: 'cafe', FS: 'fs', UNICES: 'unices' } as const;
-					const assignArea = areaMap[seat.type];
-
-					// アサイン割り当て（カバーしている場合はスロット全体、部分一致の場合は重複部分のみ）
-					const finalAssignSlots = isCovered ? seatSlots : assignedTargetSlots;
-
-					finalAssignSlots.forEach((slot) => {
-						newShiftsMap[dateStr].slots[slot].push({
-							staffId: assignedStaff.id,
-							staffName: assignedStaff.name,
-							role:
-								(assignedStaff.age_group || assignedStaff.role) === 'minor'
-									? 'minor'
-									: assignedStaff.role === 'employee'
-										? 'employee'
-										: 'adult',
-							area: assignArea,
-							isRarePinned: false
-						});
-						staffAssignedSlotsByDate[dateStr][assignedStaff.id].add(slot);
-					});
-
-					const wage =
-						Number(assignedStaff.hourlyWage || assignedStaff.hourly_wage) ||
-						(assignedStaff.role === 'employee'
-							? 1500
-							: (assignedStaff.age_group || assignedStaff.role) === 'adult'
-								? 1200
-								: 1100);
-					currentAccruedHours[assignedStaff.id] += finalAssignSlots.length * 0.25;
-
-					// 【おまかせスタッフの後出し蓋閉め処理】
-					// 部分アサイン（隙間アサイン）によって生じた余り時間を、おまかせスタッフで穴埋め
-					if (!isCovered) {
-						const remainingSlots = seatSlots.filter((slot) => !finalAssignSlots.includes(slot));
-						if (remainingSlots.length >= 1) {
-							const fillerCandidates = activeStaffsForAuto.filter((st) => {
-								if (st.id === assignedStaff.id) return false;
-								if (!(st.tags ?? []).includes(seat.type)) return false;
-
-								const w = normalizedWishes[st.id];
-								if (w.type !== 'free') return false;
-
-								const stWage =
-									Number(st.hourlyWage || st.hourly_wage) ||
-									(st.role === 'employee'
-										? 1500
-										: (st.age_group || st.role) === 'adult'
-											? 1200
-											: 1100);
-								const stCurrentEarnedWage = currentAccruedHours[st.id] * stWage;
-								const stExpectedWage = stCurrentEarnedWage + remainingSlots.length * 0.25 * stWage;
-								const stMaxLimit = st.max_monthly_income || 70000;
-
-								const isLateDate = seat.dayNum >= 25;
-								// 一般バイト（staff）のみ絶対上限超過フィルターを適用（7万円）
-								if (st.role !== 'employee' && stExpectedWage > stMaxLimit) return false;
-
-								const hasOverlap = remainingSlots.some((slot) =>
-									staffAssignedSlotsByDate[dateStr][st.id].has(slot)
-								);
-								if (hasOverlap) return false;
-
-								return true;
-							});
-
-							if (fillerCandidates.length > 0) {
-								const scoredFillers = fillerCandidates.map((st) => {
-									const targetIncome = st.target_monthly_income || 50000;
-									const wage =
-										Number(st.hourlyWage || st.hourly_wage) ||
-										(st.role === 'employee'
-											? 1500
-											: (st.age_group || st.role) === 'adult'
-												? 1200
-												: 1100);
-									const stCurrentEarnedWage = currentAccruedHours[st.id] * wage;
-									const incomeGap = targetIncome - stCurrentEarnedWage;
-
-									const consecutiveDays = getConsecutiveDays(st.id, dateStr);
-
-									// 社員の困窮度はウェイトを10分の1に引き下げる
-									let score = st.role === 'employee' ? incomeGap * 0.1 : incomeGap;
-
-									// 一般バイトには +100000点加算
-									if (st.role !== 'employee') {
-										score += 100000;
-									}
-
-									// 希望月収ストッパー減点
-									const isLateDate = seat.dayNum >= 25;
-									const stExpectedWage = stCurrentEarnedWage + remainingSlots.length * 0.25 * wage;
-									if (st.role !== 'employee' && !isLateDate && stExpectedWage > targetIncome) {
-										score -= 200000;
-									}
-
-									if (consecutiveDays >= 3) score -= 5000; // 連勤ペナルティ
-
-									const hasAssigned = staffAssignedSlotsByDate[dateStr][st.id].size > 0;
-									if (hasAssigned) score -= 3000; // 通し勤務ペナルティ
-
-									return {
-										staff: st,
-										score
-									};
-								});
-
-								scoredFillers.sort((a, b) => b.score - a.score);
-								const bestFiller = scoredFillers[0].staff;
-
-								remainingSlots.forEach((slot) => {
-									newShiftsMap[dateStr].slots[slot].push({
-										staffId: bestFiller.id,
-										staffName: bestFiller.name,
-										role:
-											(bestFiller.age_group || bestFiller.role) === 'minor'
-												? 'minor'
-												: bestFiller.role === 'employee'
-													? 'employee'
-													: 'adult',
-										area: assignArea,
-										isRarePinned: false
-									});
-									staffAssignedSlotsByDate[dateStr][bestFiller.id].add(slot);
-								});
-
-								const fWage =
-									Number(bestFiller.hourlyWage || bestFiller.hourly_wage) ||
-									(bestFiller.role === 'employee'
-										? 1500
-										: (bestFiller.age_group || bestFiller.role) === 'adult'
-											? 1200
-											: 1100);
-								currentAccruedHours[bestFiller.id] += remainingSlots.length * 0.25;
-							}
-						}
-					}
+				// ==========================================
+				// Phase 4: 満腹時の白紙（スタッフ不足）の許容
+				// ==========================================
+				if (scoredCandidates.length === 0) {
+					// 候補が0人になった場合は無理に埋めず、スタッフ不足として白紙のまま残す
+					continue;
 				}
+
+				// 同点決着ルールを適用するためのシャッフルとソート
+				const shuffled = shuffle(scoredCandidates);
+				shuffled.sort((a, b) => {
+					if (a.score !== b.score) {
+						return b.score - a.score; // スコア降順 (最優先)
+					}
+					return a.weekendCount - b.weekendCount; // 土日出勤回数昇順
+				});
+
+				// 最も優秀な候補者をアサイン
+				const best = shuffled[0];
+				const assignedStaff = best.staff;
+				const finalAssignSlots = best.isCovered ? seatSlots : best.targetSlots;
+
+				finalAssignSlots.forEach((slot) => {
+					newShiftsMap[dateStr].slots[slot].push({
+						staffId: assignedStaff.id,
+						staffName: assignedStaff.name,
+						role:
+							(assignedStaff.age_group || assignedStaff.role) === 'minor'
+								? 'minor'
+								: assignedStaff.role === 'employee'
+									? 'employee'
+									: 'adult',
+						area: assignArea,
+						isRarePinned: false
+					});
+					staffAssignedSlotsByDate[dateStr][assignedStaff.id].add(slot);
+				});
+
+				// アサインした時間分を累積時間に加算
+				currentAccruedHours[assignedStaff.id] += best.actualAssignHours;
 			}
 
 			// --- 全スロット割り当て完了後、日ごとの後処理を実行 ---
