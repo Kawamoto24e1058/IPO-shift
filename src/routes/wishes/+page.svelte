@@ -447,13 +447,15 @@
   let targetIncomeMin = $derived(currentUser?.targetIncomeMin || 0);
   let targetIncomeMax = $derived(currentUser?.target_monthly_income || currentUser?.targetIncomeMax || 0);
 
-  // 編集用の目標希望月収ローカルステート
+  // 編集用の目標希望月収・絶対上限月収ローカルステート
   let targetMonthlyIncomeInput = $state(0);
+  let maxMonthlyIncomeInput = $state(0);
 
   // currentUserのロード時、あるいは切り替え時にローカルステートに初期値を同期
   $effect(() => {
     if (currentUser) {
       targetMonthlyIncomeInput = currentUser.target_monthly_income || currentUser.targetIncomeMax || 0;
+      maxMonthlyIncomeInput = currentUser.max_monthly_income || 0;
     }
   });
 
@@ -834,12 +836,13 @@
     try {
       await submitMonthlyWishes(userId, targetYear, targetMonth, wishes);
 
-      // ユーザーの target_monthly_income および isLateSubmission を Firestore に保存・更新する
+      // ユーザーの target_monthly_income, max_monthly_income および isLateSubmission を Firestore に保存・更新する
       const userRef = doc(db, 'users', userId);
       const isLate = isDeadlinePassed;
       await setDoc(userRef, {
         target_monthly_income: targetMonthlyIncomeInput,
         targetIncomeMax: targetMonthlyIncomeInput, // 互換性のため
+        max_monthly_income: maxMonthlyIncomeInput,
         isLateSubmission: isLate
       }, { merge: true });
 
@@ -848,6 +851,7 @@
       if (idx !== -1) {
         staffs[idx].target_monthly_income = targetMonthlyIncomeInput;
         staffs[idx].targetIncomeMax = targetMonthlyIncomeInput;
+        staffs[idx].max_monthly_income = maxMonthlyIncomeInput;
         staffs[idx].isLateSubmission = isLate;
       }
 
@@ -1199,28 +1203,52 @@
             </div>
           </div>
 
-          <!-- 【目標希望月収の設定】 (プレミアムカード・リアルタイムシミュレーター同期) -->
-          <div class="bg-gradient-to-r from-indigo-50/60 to-teal-50/30 border border-indigo-100/70 p-5 rounded-3xl space-y-4 shadow-sm flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div class="space-y-1">
-              <h3 class="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
-                <span>🎯</span>
-                <span>目標希望月収の設定</span>
-              </h3>
-              <p class="text-[10px] text-slate-500 font-medium">今月のシフト配置における目標希望金額を ¥5,000 単位で設定してください。</p>
+          <!-- 【目標希望月収と絶対上限月収の設定】 (プレミアムカード・リアルタイムシミュレーター同期) -->
+          <div class="bg-gradient-to-r from-indigo-50/60 to-teal-50/30 border border-indigo-100/70 p-5 rounded-3xl space-y-4 shadow-sm flex flex-col md:flex-row md:items-start md:justify-between gap-6">
+            <div class="space-y-3 flex-1">
+              <div class="space-y-1">
+                <h3 class="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
+                  <span>🎯</span>
+                  <span>目標希望月収の設定</span>
+                </h3>
+                <p class="text-[10px] text-slate-500 font-medium">今月のシフト配置における目標希望金額を ¥5,000 単位で設定してください。</p>
+              </div>
+              <div class="flex items-center gap-2 bg-white/90 backdrop-blur-sm border border-slate-200/80 rounded-2xl px-4 py-2 shadow-xs max-w-[220px] justify-between hover:border-slate-300 transition-colors">
+                <span class="text-xs text-slate-400 font-extrabold">¥</span>
+                <input 
+                  type="number" 
+                  bind:value={targetMonthlyIncomeInput}
+                  min="0"
+                  step="5000"
+                  class="w-full bg-transparent text-right text-sm font-extrabold text-slate-800 focus:outline-none"
+                  placeholder="例: 45,000"
+                  aria-label="目標希望月収"
+                />
+                <span class="text-[10px] text-slate-500 font-bold ml-1">円</span>
+              </div>
             </div>
-            
-            <div class="flex items-center gap-2 bg-white/90 backdrop-blur-sm border border-slate-200/80 rounded-2xl px-4 py-2 shadow-xs min-w-[180px] justify-between self-start sm:self-auto hover:border-slate-300 transition-colors">
-              <span class="text-xs text-slate-400 font-extrabold">¥</span>
-              <input 
-                type="number" 
-                bind:value={targetMonthlyIncomeInput}
-                min="0"
-                step="5000"
-                class="w-28 bg-transparent text-right text-sm font-extrabold text-slate-800 focus:outline-none"
-                placeholder="例: 45,000"
-                aria-label="目標希望月収"
-              />
-              <span class="text-[10px] text-slate-500 font-bold ml-1">円</span>
+
+            <div class="space-y-3 flex-1">
+              <div class="space-y-1">
+                <h3 class="text-sm font-extrabold text-slate-800 flex items-center gap-1.5">
+                  <span>🛑</span>
+                  <span>絶対上限月収の設定（扶養制限など）</span>
+                </h3>
+                <p class="text-[10px] text-slate-500 font-medium">これ以上絶対に稼ぎたくない月収の上限（未設定時は70,000円）です。</p>
+              </div>
+              <div class="flex items-center gap-2 bg-white/90 backdrop-blur-sm border border-slate-200/80 rounded-2xl px-4 py-2 shadow-xs max-w-[220px] justify-between hover:border-slate-300 transition-colors">
+                <span class="text-xs text-slate-400 font-extrabold">¥</span>
+                <input 
+                  type="number" 
+                  bind:value={maxMonthlyIncomeInput}
+                  min="0"
+                  step="5000"
+                  class="w-full bg-transparent text-right text-sm font-extrabold text-slate-800 focus:outline-none"
+                  placeholder="未設定時は70,000"
+                  aria-label="絶対上限月収"
+                />
+                <span class="text-[10px] text-slate-500 font-bold ml-1">円</span>
+              </div>
             </div>
           </div>
 
