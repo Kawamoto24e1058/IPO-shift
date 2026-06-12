@@ -923,9 +923,15 @@
           const consecutiveDays = getConsecutiveDays(s.id, dateStr);
           const weekendCount = getWeekendShiftCount(s.id);
 
-          let score = incomeGap; // 基本スコアは残り給与差額
+          // 社員（employee）の困窮度はウェイトを10分の1に引き下げる
+          let score = s.role === 'employee' ? incomeGap * 0.1 : incomeGap;
 
-          // A. 希望日時マッチ（カバーしていれば大幅加点で最優先）
+          // A-1. 【一般バイト最優先アサイン】: 一般バイト（staff）には +100000点
+          if (s.role !== 'employee') {
+            score += 100000;
+          }
+
+          // A-2. 希望日時マッチ（カバーしていれば大幅加点で最優先）
           if (isCovered) {
             score += 50000;
           }
@@ -944,15 +950,15 @@
             score -= 3000;
           }
 
-          // D. 【目標金額のストッパー】: 予想支給額が「目標額 ＋ 6,000円」のラインを超えるなら -10000点
-          // (※ただし25日以降の遅延日程はペナルティ対象外とする)
+          // D. 【目標金額のストッパー】: 予想支給額が「目標額 ＋ 6,000円」のラインを超えるなら -200000点
+          // (※一般バイトのみ対象とし、25日以降の遅延日程はペナルティ対象外とする)
           const actualAssignHours = targetSlots.length * 0.25;
           const expectedWage = currentEarnedWage + (actualAssignHours * wage);
           const maxLimit = Math.min(s.target_monthly_income || s.targetIncomeMax || 50000, 50000) + 6000;
           const isLateDate = seat.dayNum >= 25;
 
-          if (!isLateDate && expectedWage > maxLimit) {
-            score -= 10000;
+          if (s.role !== 'employee' && !isLateDate && expectedWage > maxLimit) {
+            score -= 200000;
           }
 
           return {
@@ -1019,7 +1025,8 @@
                 const stMaxLimit = Math.min(st.target_monthly_income || st.targetIncomeMax || 50000, 50000) + 6000;
 
                 const isLateDate = seat.dayNum >= 25;
-                if (!isLateDate && stExpectedWage > stMaxLimit) return false;
+                // 一般バイト（staff）のみ上限超過フィルターを適用
+                if (st.role !== 'employee' && !isLateDate && stExpectedWage > stMaxLimit) return false;
 
                 const hasOverlap = remainingSlots.some(slot => staffAssignedSlotsByDate[dateStr][st.id].has(slot));
                 if (hasOverlap) return false;
@@ -1036,7 +1043,14 @@
 
                   const consecutiveDays = getConsecutiveDays(st.id, dateStr);
 
-                  let score = incomeGap;
+                  // 社員の困窮度はウェイトを10分の1に引き下げる
+                  let score = st.role === 'employee' ? incomeGap * 0.1 : incomeGap;
+
+                  // 一般バイトには +100000点加算
+                  if (st.role !== 'employee') {
+                    score += 100000;
+                  }
+
                   if (consecutiveDays >= 3) score -= 5000; // 連勤ペナルティ
 
                   const hasAssigned = staffAssignedSlotsByDate[dateStr][st.id].size > 0;
