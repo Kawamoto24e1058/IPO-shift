@@ -1228,9 +1228,10 @@
 						const expectedWage = currentEarnedWage + actualAssignHours * wage;
 
 						// 上限給の盾：今回のシフトに入った場合の予想支給額が絶対上限月収（max_monthly_income）を超える場合
-						const absoluteLimit = s.max_monthly_income || 70000;
-						if (s.role !== 'employee' && expectedWage > absoluteLimit) {
-							return null; // 一般バイトのみ適用、1円でも超える場合は強制除外
+						// 社員・バイトに関わらず、未設定時は80,000円を一律の絶対上限として1円でも超える場合は強制除外
+						const absoluteLimit = s.max_monthly_income || 80000;
+						if (expectedWage > absoluteLimit) {
+							return null;
 						}
 
 						// ==========================================
@@ -1238,13 +1239,11 @@
 						// ==========================================
 						let score = 0;
 
-						// 1. 【希望給への困窮度（最優先）】
-						// role === 'staff' (一般バイト) の場合のみ、 (target_monthly_income - 現在の確定給与) * 10 を加算
-						if (s.role === 'staff') {
-							const targetIncome = s.target_monthly_income || 50000;
-							const incomeGap = targetIncome - currentEarnedWage;
-							score += incomeGap * 10;
-						}
+						// 1. 【希望給に対する進捗率（％）】による全員一斉のフラット動的ソート
+						// 役割の優先・劣後を完全撤廃し、希望給に対する進捗率（確定給与 ÷ target_monthly_income）が低い人ほど高得点にする
+						const targetIncome = s.target_monthly_income || 50000;
+						const progressRate = currentEarnedWage / targetIncome;
+						score += (1 - progressRate) * 100000;
 
 						// 2. 【最低連続勤務時間の保証】
 						// 重複する希望時間が 3時間（12スロット）未満になる配置は、-10000点
@@ -1281,6 +1280,12 @@
 						const hasAssignedThisDay = staffAssignedSlotsByDate[dateStr][s.id].size > 0;
 						if (hasAssignedThisDay) {
 							score -= 3000;
+						}
+
+						// 6. 【希望給達成時の超強力ブレーキ】
+						// 今回アサインされると希望給（targetIncome）を達成（予想給与額が targetIncome を超過）する場合、一律で -100000点
+						if (expectedWage > targetIncome) {
+							score -= 100000;
 						}
 
 						// 土日出勤数とアサイン用の情報を格納して返却
