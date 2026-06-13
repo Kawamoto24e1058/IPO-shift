@@ -137,13 +137,8 @@ class AuthState {
 		} catch (e: any) {
 			console.warn('[Auth] Firebase email sign-in failed, trying premium mock fallback:', e);
 
-			// Firebase API未有効化 (configuration-not-found) または通信オフライン時の特別救済措置
-			const isConfigError =
-				e.code === 'auth/configuration-not-found' || e.message?.includes('configuration-not-found');
-			const isOfflineError =
-				e.message?.includes('offline') || e.code?.includes('network-request-failed');
-
-			if (isConfigError || isOfflineError || typeof window !== 'undefined') {
+			// Firebase API未有効化または通信オフライン時の特別救済措置 (常にモックセッションを適用)
+			if (typeof window !== 'undefined') {
 				// メールアドレスからロールをインテリジェント自動判定
 				const lowerEmail = email.toLowerCase();
 				let role: 'employee' | 'adult' | 'minor' = 'adult';

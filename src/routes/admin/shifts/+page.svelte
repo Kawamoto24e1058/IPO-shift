@@ -813,6 +813,24 @@
 	// 月データ一括ロード処理
 	async function loadMonthData() {
 		isLoading = true;
+		if (authState.isOfflineMode) {
+			console.log('[Offline Mode] Skipping Firestore fetch. Initializing mock data.');
+			initUnicesEvents(currentYear, currentMonth);
+			initFsDays(currentYear, currentMonth);
+
+			// 空の確定シフトマップを初期化
+			const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+			const newShiftsMap: { [dateStr: string]: DailyShift } = {};
+			for (let d = 1; d <= lastDay; d++) {
+				const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+				newShiftsMap[dateStr] = { date: dateStr, slots: {}, unassignedStaffs: [] };
+			}
+			monthlyConfirmedShifts = newShiftsMap;
+			wishesMapByDate = await loadMonthWishes(currentYear, currentMonth);
+
+			isLoading = false;
+			return;
+		}
 		try {
 			// 0. UNICES & FS の日程固定設定をロード
 			try {
