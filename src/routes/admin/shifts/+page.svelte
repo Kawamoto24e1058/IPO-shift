@@ -2018,6 +2018,91 @@
 		}
 	}
 
+	// デバッグ用：スタッフのダミー希望データをランダム生成してFirestoreに保存
+	async function generateDummyWishes() {
+		isLoading = true;
+		try {
+			const year = currentYear;
+			const month = currentMonth;
+			const lastDay = new Date(year, month, 0).getDate();
+
+			const batch = writeBatch(db);
+
+			// バラバラな希望時間パターン
+			const specificTimes = [
+				{ start: '09:45', end: '13:00' },
+				{ start: '12:00', end: '17:00' },
+				{ start: '17:00', end: '20:15' },
+				{ start: '10:00', end: '12:00' }, // 2時間 (短時間ペナルティ対象)
+				{ start: '18:00', end: '20:00' }, // 2時間 (短時間ペナルティ対象)
+				{ start: '09:45', end: '15:00' }, // 前半
+				{ start: '15:00', end: '20:15' }, // 後半
+				{ start: '11:15', end: '16:45' }, // 不規則
+				{ start: '13:00', end: '18:00' }, // 不規則
+				{ start: '09:45', end: '20:15' } // 終日特定
+			];
+
+			for (const s of staffs) {
+				const wishes: { [dateStr: string]: any } = {};
+
+				for (let d = 1; d <= lastDay; d++) {
+					const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+					const rand = Math.random();
+
+					let wishType: 'free' | 'ng' | 'specific' = 'free';
+					let startTime = '';
+					let endTime = '';
+
+					if (rand < 0.15) {
+						// 15% の確率で休み希望
+						wishType = 'ng';
+					} else if (rand < 0.45) {
+						// 30% の確率でおまかせ（free）
+						wishType = 'free';
+						startTime = '09:45';
+						endTime = '20:15';
+					} else {
+						// 55% の確率で特定時間（specific）
+						wishType = 'specific';
+						const timePattern = specificTimes[Math.floor(Math.random() * specificTimes.length)];
+						startTime = timePattern.start;
+						endTime = timePattern.end;
+					}
+
+					wishes[dateStr] = {
+						date: dateStr,
+						type: wishType,
+						startTime,
+						endTime,
+						isOverridden: false,
+						isSubmitted: true
+					};
+				}
+
+				const submittalId = `${s.id}_${year}_${String(month).padStart(2, '0')}`;
+				const submittalRef = doc(db, 'submittals', submittalId);
+				batch.set(submittalRef, {
+					userId: s.id,
+					year,
+					month,
+					wishes,
+					isSubmitted: true,
+					isUnlocked: false,
+					updatedAt: Timestamp.now()
+				});
+			}
+
+			await batch.commit();
+			alert('ダミー希望データをバラバラに生成し、Firestoreへ保存しました！');
+			await loadMonthData();
+		} catch (e) {
+			console.error('Failed to generate dummy wishes:', e);
+			alert('ダミー希望データの生成に失敗しました。');
+		} finally {
+			isLoading = false;
+		}
+	}
+
 	// 空き枠テキストの生成用
 	function getLineEmptySlotsText(
 		year: number,
@@ -2485,6 +2570,15 @@
 								class="flex w-full cursor-pointer items-center justify-center gap-1 rounded-full bg-slate-900 px-4 py-2 font-sans text-[10px] font-bold text-white shadow-xs transition-all duration-300 hover:scale-[1.02] hover:bg-slate-800 active:scale-95"
 							>
 								<span>⚡ 月間シフトを一括自動生成</span>
+							</button>
+
+							<!-- デバッグ用：ダミー希望一括生成ボタン -->
+							<button
+								type="button"
+								onclick={generateDummyWishes}
+								class="flex w-full cursor-pointer items-center justify-center gap-1 rounded-full border border-dashed border-amber-300 bg-amber-50 px-4 py-2 font-sans text-[10px] font-bold text-amber-700 transition-all duration-300 hover:bg-amber-100 active:scale-95"
+							>
+								<span>🎲 デバッグ：バラバラな希望希望を生成(Firestore保存)</span>
 							</button>
 						</div>
 
