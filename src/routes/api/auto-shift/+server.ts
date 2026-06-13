@@ -168,7 +168,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		// ===================================================
 		const ai = new GoogleGenAI({ apiKey });
 		const response = await ai.models.generateContent({
-			model: 'gemini-3.1-pro',
+			model: 'gemini-2.5-pro',
 			contents: JSON.stringify({ staffs: minifiedStaffs, slots: minifiedSlots }),
 			config: {
 				systemInstruction,
