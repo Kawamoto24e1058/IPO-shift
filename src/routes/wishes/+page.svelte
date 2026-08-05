@@ -539,43 +539,43 @@
 	const stamps: Stamp[] = [
 		{
 			id: 'free',
-			label: 'おまかせ',
-			icon: '✅',
+			label: '直感タップ (おまかせ ↔ NG)',
+			icon: '👆',
 			type: 'free',
 			startTime: '09:45',
 			endTime: '20:15',
-			colorClass: 'text-slate-650 border-slate-200 bg-slate-50',
-			bgClass: 'bg-slate-100'
-		},
-		{
-			id: 'ng',
-			label: 'NG',
-			icon: '❌',
-			type: 'ng',
-			startTime: '',
-			endTime: '',
-			colorClass: 'text-rose-650 border-rose-200 bg-rose-50',
-			bgClass: 'bg-rose-100'
+			colorClass: 'text-emerald-700 border-emerald-200 bg-emerald-50',
+			bgClass: 'bg-emerald-100'
 		},
 		{
 			id: 'fixed1',
-			label: '固定枠1 (09:45-15:00)',
+			label: '早番 (09:45-15:00)',
 			icon: '🌅',
 			type: 'specific',
 			startTime: '09:45',
 			endTime: '15:00',
-			colorClass: 'text-sky-650 border-sky-200 bg-sky-50',
+			colorClass: 'text-sky-700 border-sky-200 bg-sky-50',
 			bgClass: 'bg-sky-100'
 		},
 		{
 			id: 'fixed2',
-			label: '固定枠2 (15:00-20:15)',
+			label: '遅番 (15:00-20:15)',
 			icon: '🌇',
 			type: 'specific',
 			startTime: '15:00',
 			endTime: '20:15',
-			colorClass: 'text-indigo-650 border-indigo-200 bg-indigo-50',
+			colorClass: 'text-indigo-700 border-indigo-200 bg-indigo-50',
 			bgClass: 'bg-indigo-100'
+		},
+		{
+			id: 'ng',
+			label: '終日NG',
+			icon: '❌',
+			type: 'ng',
+			startTime: '',
+			endTime: '',
+			colorClass: 'text-rose-700 border-rose-200 bg-rose-50',
+			bgClass: 'bg-rose-100'
 		},
 		{
 			id: 'custom',
@@ -584,7 +584,7 @@
 			type: 'specific',
 			startTime: '10:00',
 			endTime: '18:00',
-			colorClass: 'text-amber-650 border-amber-200 bg-amber-50',
+			colorClass: 'text-amber-700 border-amber-200 bg-amber-50',
 			bgClass: 'bg-amber-100'
 		}
 	];
@@ -1129,17 +1129,33 @@
 		}
 	}
 
-	// カレンダーセルがクリックされた際のスタンプ適用
+	// カレンダーセルがクリックされた際のスタンプ適用 (おまかせ ↔ NG 直感トグル ＆ 時間スタンプ)
 	async function applyStampToCell(dateStr: string, day: number) {
 		if (isLocked) {
 			alert('締め切りを過ぎているか、ロックされているため変更できません。');
 			return;
 		}
+
+		// 1. 直感タップモード (selectedStampId === 'free')
+		// 🟢 おまかせ ➔ 1タップで ❌ NG に切り替え、 ❌ NG ➔ 1タップで 🟢 おまかせ に戻す
+		if (selectedStampId === 'free') {
+			const currentWish = wishes.find((w) => w.date === dateStr);
+			if (currentWish?.type === 'ng') {
+				await applyStampById(dateStr, day, 'free');
+			} else {
+				await applyStampById(dateStr, day, 'ng');
+			}
+			return;
+		}
+
+		// 2. カスタム時間選択時
 		if (selectedStampId === 'custom') {
 			const wish = wishes.find((w) => w.date === dateStr);
 			enterInlineEditing(dateStr, wish);
 			return;
 		}
+
+		// 3. 固定枠スタンプ (fixed1, fixed2, ng) 選択時
 		await applyStampById(dateStr, day, selectedStampId);
 	}
 
@@ -1835,17 +1851,21 @@
 
 					<!-- 常駐スタンプパレット (カレンダー上部に常駐する丸みのあるトレイ) -->
 					<div
-						class="space-y-3 rounded-3xl border border-slate-200/60 bg-slate-50 p-4 shadow-sm select-none"
+						class="space-y-3 rounded-3xl border border-slate-200/60 bg-slate-50 p-4 shadow-xs select-none"
 					>
-						<div class="flex items-center justify-between">
-							<span class="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+						<div class="flex flex-wrap items-center justify-between gap-2">
+							<span class="flex items-center gap-1.5 text-xs font-bold text-slate-800">
 								<span>🎨</span>
-								<span>時間スタンプパレット</span>
+								<span>希望入力モード ＆ スタンプパレット</span>
 							</span>
 							<span
-								class="rounded-full border border-indigo-100 bg-indigo-50 px-2.5 py-0.5 text-[9px] font-extrabold tracking-wider text-indigo-600 uppercase"
+								class="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-[10px] font-extrabold text-indigo-700 shadow-xs"
 							>
-								タップするだけで直感入力！
+								{#if selectedStampId === 'free'}
+									👆 直感タップモード (1タップでおまかせ ↔ NG 切り替え)
+								{:else}
+									⚡️ スタンプ選択中 (セルをタップで即時適用)
+								{/if}
 							</span>
 						</div>
 
@@ -1855,13 +1875,13 @@
 									type="button"
 									onclick={() => (selectedStampId = stamp.id)}
 									disabled={isLocked}
-									class="flex items-center justify-center gap-2 rounded-2xl border-2 px-4 py-3 font-sans text-xs font-bold shadow-sm transition-all duration-300
+									class="flex items-center justify-center gap-2 rounded-2xl border-2 px-3.5 py-2.5 font-sans text-xs font-bold shadow-xs transition-all duration-200
                     {isLocked
 										? 'cursor-not-allowed border-slate-200 bg-slate-100/50 text-slate-400 opacity-50'
 										: 'cursor-pointer hover:scale-[1.02] active:scale-95'}
                     {selectedStampId === stamp.id && !isLocked
-										? 'border-slate-900 bg-slate-900 text-white shadow-md ring-4 ring-slate-200/50'
-										: `${stamp.colorClass} border-slate-200/80 hover:border-slate-400`}"
+										? 'border-indigo-600 bg-indigo-600 text-white shadow-md ring-2 ring-indigo-200'
+										: `${stamp.colorClass} border-slate-200/80 hover:border-slate-300`}"
 								>
 									<span class="text-sm">{stamp.icon}</span>
 									<span>{stamp.label}</span>
@@ -1869,8 +1889,14 @@
 							{/each}
 						</div>
 
-						<p class="text-center text-[10px] font-medium text-slate-400">
-							※スタンプを選択し、下のカレンダーの日付マスをタップすると、その内容で一瞬で上書き保存されます。
+						<p class="text-center text-[10px] font-medium text-slate-500">
+							{#if selectedStampId === 'free'}
+								💡 <strong>「直感タップモード」選択中</strong>: 下のカレンダーの日付セルをポチポチ押すだけで「🟢おまかせ ↔ ❌NG」が一瞬で切り替わります。
+							{:else if selectedStampId === 'custom'}
+								⏰ <strong>「カスタム時間」選択中</strong>: セルをタップすると時間入力ポップアップが開き指定できます。
+							{:else}
+								⚡️ <strong>固定枠選択中</strong>: セルをタップすると選択中の時間帯が一瞬で適用されます。
+							{/if}
 						</p>
 					</div>
 
@@ -1924,20 +1950,20 @@
 										onkeydown={(e) =>
 											(e.key === 'Enter' || e.key === ' ') &&
 											applyStampToCell(cell.dateStr, cell.day)}
-										class="group relative flex aspect-square flex-col justify-between rounded-2xl border p-2 shadow-sm transition-all duration-300 ease-in-out select-none
+										class="group relative flex aspect-square flex-col justify-between rounded-2xl border p-2 shadow-xs transition-all duration-200 ease-in-out select-none
                       {activeMenuDate === cell.dateStr
 											? 'z-30 overflow-visible border-indigo-400 ring-2 ring-indigo-400'
 											: 'z-10 overflow-hidden'}
                       {isLocked
 											? 'cursor-not-allowed opacity-60'
-											: 'cursor-pointer hover:scale-[1.03] hover:border-slate-400 hover:shadow-md active:scale-95'}
-                      {wish?.isOverridden
-											? 'border-amber-300 bg-amber-50/60 text-amber-700 shadow-sm ring-2 ring-amber-200/50'
+											: 'cursor-pointer hover:scale-[1.03] hover:shadow-md active:scale-95'}
+                      {wish?.type === 'ng'
+											? 'border-rose-300 bg-rose-50/90 text-rose-800 shadow-xs'
 											: wish?.type === 'specific'
-												? 'border-blue-100 bg-blue-50/70 text-blue-700'
-												: wish?.type === 'ng'
-													? 'border-red-100 bg-red-50/70 text-red-700'
-													: 'border-slate-200/80 bg-slate-50 text-slate-500'}
+												? 'border-indigo-200 bg-indigo-50/80 text-indigo-800 shadow-xs'
+												: wish?.isOverridden
+													? 'border-amber-300 bg-amber-50/70 text-amber-800 shadow-xs'
+													: 'border-slate-200/80 bg-white text-slate-700'}
                     "
 									>
 										<!-- 上部: 日付 -->
@@ -1984,7 +2010,7 @@
 											{:else if wish?.type === 'specific'}
 												<div class="flex w-full justify-center">
 													<span
-														class="flex items-center justify-center gap-1 rounded-full border border-blue-100/50 bg-blue-50 px-2 py-1 text-[9px] font-bold text-blue-600 shadow-sm sm:text-[10px]"
+														class="flex items-center justify-center gap-1 rounded-full border border-indigo-200 bg-indigo-100 px-2 py-1 text-[9px] font-extrabold text-indigo-700 shadow-xs sm:text-[10px]"
 														title="特定時間"
 													>
 														<span>⏰</span>
@@ -1994,7 +2020,7 @@
 											{:else if wish?.type === 'ng'}
 												<div class="flex w-full justify-center">
 													<span
-														class="text-rose-655 flex items-center justify-center gap-1 rounded-full border border-rose-100/50 bg-rose-50 px-2 py-1 text-[9px] font-bold shadow-sm sm:text-[10px]"
+														class="flex items-center justify-center gap-1 rounded-full border border-rose-200 bg-rose-100 px-2.5 py-1 text-[9px] font-extrabold text-rose-700 shadow-xs sm:text-[10px]"
 														title="NG"
 													>
 														<span>❌</span>
@@ -2004,10 +2030,10 @@
 											{:else}
 												<div class="flex w-full justify-center">
 													<span
-														class="flex items-center justify-center gap-1 rounded-full border border-slate-200/60 bg-white px-2 py-1 text-[9px] font-bold text-slate-500 shadow-sm sm:text-[10px]"
+														class="flex items-center justify-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[9px] font-bold text-emerald-700 shadow-xs sm:text-[10px]"
 														title="おまかせ"
 													>
-														<span>✅</span>
+														<span>🟢</span>
 														<span>おまかせ</span>
 													</span>
 												</div>
