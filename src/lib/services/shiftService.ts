@@ -965,8 +965,54 @@ export async function getDailyWishes(dateStr: string): Promise<{ [staffId: strin
 	}
 }
 
+// LocalStorage から `wish_${yearMonth}_` のキーをスキャンする補助関数
+function loadWishesFromLocalStorageFallback(yMonth: string) {
+	const results: Array<{
+		userId: string;
+		yearMonth: string;
+		wishes: { [dateStr: string]: Wish };
+		offDates: string[];
+		target_monthly_income: number;
+		max_monthly_income: number;
+		preferredDaysPerWeek: number;
+		dayPreferencePolicy: string;
+		isSubmitted: boolean;
+	}> = [];
+
+	if (typeof window === 'undefined' || !window.localStorage) return results;
+
+	try {
+		for (let i = 0; i < localStorage.length; i++) {
+			const key = localStorage.key(i);
+			if (key && key.startsWith(`wish_${yMonth}_`)) {
+				const raw = localStorage.getItem(key);
+				if (raw) {
+					const parsed = JSON.parse(raw);
+					const uId = parsed.userId || key.replace(`wish_${yMonth}_`, '');
+					results.push({
+						userId: uId,
+						yearMonth: parsed.yearMonth || yMonth,
+						wishes: parsed.wishes || {},
+						offDates: parsed.offDates || [],
+						target_monthly_income: parsed.target_monthly_income || 0,
+						max_monthly_income: parsed.max_monthly_income || 0,
+						preferredDaysPerWeek: Number(parsed.preferredDaysPerWeek) || 0,
+						dayPreferencePolicy: parsed.dayPreferencePolicy || 'ANY',
+						isSubmitted: parsed.isSubmitted !== undefined ? parsed.isSubmitted : true
+					});
+					console.log(`[ShiftGen LocalStorage Fallback] Loaded offDates for staff (${uId}):`, parsed.offDates);
+				}
+			}
+		}
+	} catch (e) {
+		console.warn('[ShiftGen LocalStorage Fallback] Failed to scan LocalStorage for wishes:', e);
+	}
+
+	return results;
+}
+
 /**
- * 対象月の全スタッフの希望（wishes）のリアルタイム監視 (onSnapshot)
+ * 対象月の全スタッフの希望（wishes）のリアルタイム監視 (onSnapshot + LocalStorage Fallback)
  * wishes/${yearMonth}_${userId} ドキュメント群をリアルタイム取得する
  */
 export function subscribeMonthlyWishes(
@@ -1008,10 +1054,21 @@ export function subscribeMonthlyWishes(
 				};
 			});
 
+			// LocalStorage バックアップの補完
+			const lsData = loadWishesFromLocalStorageFallback(yearMonth);
+			const idSet = new Set(docsData.map((d) => d.userId));
+			lsData.forEach((l) => {
+				if (!idSet.has(l.userId)) {
+					docsData.push(l);
+				}
+			});
+
 			callback(docsData);
 		},
 		(err) => {
-			console.warn('[ShiftService] subscribeMonthlyWishes onSnapshot listener error:', err);
+			console.warn('[ShiftService] subscribeMonthlyWishes onSnapshot error, executing LocalStorage fallback:', err);
+			const lsData = loadWishesFromLocalStorageFallback(yearMonth);
+			callback(lsData);
 		}
 	);
 }

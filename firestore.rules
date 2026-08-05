@@ -1,27 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 開発・テスト環境用：wishes, shifts, staffs, submittals, users, settings 全読み書き許可
-    match /wishes/{wishId} {
-      allow read, write: if true;
-    }
-    match /shifts/{shiftId} {
-      allow read, write: if true;
-    }
-    match /staffs/{staffId} {
-      allow read, write: if true;
-    }
-    match /submittals/{submittalId} {
-      allow read, write: if true;
-    }
-    match /users/{userId} {
-      allow read, write: if true;
-    }
-    match /settings/{settingId} {
-      allow read, write: if true;
-    }
-    
-    // その他のすべてのドキュメントへのフルアクセスを許可
     match /{document=**} {
       allow read, write: if true;
     }
