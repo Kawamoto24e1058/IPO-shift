@@ -511,6 +511,132 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 		}
 
+		// ===================================================
+		// Step 4: 店舗防衛ロジック（無人時間の完全撲滅・開閉店09:45〜20:15カバー保証・ワンオペ抑制）
+		// ===================================================
+		for (let d = 1; d <= lastDay; d++) {
+			const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+			const normalizedTargetDate = normalizeDateStr(dateStr);
+
+			// 当日の確定アサインリスト
+			const dayAssignments = assignments.filter(
+				(a) => normalizeDateStr(a.date) === normalizedTargetDate && a.assignedStaffId
+			);
+
+			const OPEN_MIN = 585; // 09:45
+			const CLOSE_MIN = 1215; // 20:15
+			const intervalCount: { [minute: number]: number } = {};
+
+			for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
+				intervalCount[m] = 0;
+			}
+
+			dayAssignments.forEach((a) => {
+				const [sH, sM] = a.startTime.split(':').map(Number);
+				const [eH, eM] = a.endTime.split(':').map(Number);
+				const startM = sH * 60 + sM;
+				const endM = eH * 60 + eM;
+
+				for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
+					if (m >= startM && m < endM) {
+						intervalCount[m] += 1;
+					}
+				}
+			});
+
+			// A1. 開店カバー判定 (09:45の開始が0名の場合)
+			if (intervalCount[OPEN_MIN] === 0 && dayAssignments.length > 0) {
+				const earliestAssign = dayAssignments.reduce((prev, curr) => {
+					const [pH, pM] = prev.startTime.split(':').map(Number);
+					const [cH, cM] = curr.startTime.split(':').map(Number);
+					return cH * 60 + cM < pH * 60 + pM ? curr : prev;
+				});
+
+				if (earliestAssign) {
+					const staff = minifiedStaffs.find((s: any) => s.id === earliestAssign.assignedStaffId);
+					if (staff && !isStaffOff(staff, normalizedTargetDate)) {
+						earliestAssign.startTime = '09:45';
+						console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr}`);
+					}
+				}
+			}
+
+			// A2. 閉店カバー判定 (20:15の終了が0名の場合)
+			if (intervalCount[CLOSE_MIN - 15] === 0 && dayAssignments.length > 0) {
+				const latestAssign = dayAssignments.reduce((prev, curr) => {
+					const [pH, pM] = prev.endTime.split(':').map(Number);
+					const [cH, cM] = curr.endTime.split(':').map(Number);
+					return cH * 60 + cM > pH * 60 + pM ? curr : prev;
+				});
+
+				if (latestAssign) {
+					const staff = minifiedStaffs.find((s: any) => s.id === latestAssign.assignedStaffId);
+					if (staff && !isStaffOff(staff, normalizedTargetDate)) {
+						latestAssign.endTime = '20:15';
+						console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr}`);
+					}
+				}
+			}
+
+			// B. 無人時間帯（0名時間）の自動埋め拡張
+			for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
+				if (intervalCount[m] === 0 && dayAssignments.length > 0) {
+					const adjAssign = dayAssignments.find((a) => {
+						const [sH, sM] = a.startTime.split(':').map(Number);
+						const [eH, eM] = a.endTime.split(':').map(Number);
+						const sMins = sH * 60 + sM;
+						const eMins = eH * 60 + eM;
+						return Math.abs(sMins - (m + 15)) <= 30 || Math.abs(eMins - m) <= 30;
+					});
+
+					if (adjAssign) {
+						const [sH, sM] = adjAssign.startTime.split(':').map(Number);
+						const [eH, eM] = adjAssign.endTime.split(':').map(Number);
+						const sMins = sH * 60 + sM;
+						const eMins = eH * 60 + eM;
+
+						if (m < sMins) {
+							adjAssign.startTime = minutesToTime(m);
+						}
+						if (m + 15 > eMins) {
+							adjAssign.endTime = minutesToTime(m + 15);
+						}
+						console.log(`[Store Defense] Gap auto-filled on ${dateStr} at ${minutesToTime(m)}`);
+					}
+				}
+			}
+
+			// C. 店舗不備警告判定 (最終チェック)
+			let finalHasZero = false;
+			for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
+				let count = 0;
+				dayAssignments.forEach((a) => {
+					const [sH, sM] = a.startTime.split(':').map(Number);
+					const [eH, eM] = a.endTime.split(':').map(Number);
+					const sMins = sH * 60 + sM;
+					const eMins = eH * 60 + eM;
+					if (m >= sMins && m < eMins) count++;
+				});
+				if (count === 0) {
+					finalHasZero = true;
+					break;
+				}
+			}
+
+			if (finalHasZero || dayAssignments.length === 0) {
+				console.warn(`[Store Deficit Alert] Date ${dateStr} has unresolvable store deficit (opening/closing or gap).`);
+				assignments.push({
+					date: dateStr,
+					slotId: `${dateStr}_STORE_DEFICIT_ALERT`,
+					startTime: '09:45',
+					endTime: '20:15',
+					assignedStaffId: '',
+					storeDeficit: true,
+					deficitReason: '⚠️ 店舗不備（開閉店枠不足または無人時間あり）'
+				});
+			}
+		}
+
 		const totalDuration = Date.now() - startLoopTime;
 		console.log(`[Pure Math Solver] Completed in ${totalDuration}ms. Total slots: ${allSlots.length}`);
 		console.log('[Pure Math Solver] Final earned wages summary:');
