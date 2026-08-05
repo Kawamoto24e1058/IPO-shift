@@ -16,6 +16,9 @@
 		getConfirmedShift,
 		backupWishesToNotion,
 		getMonthlyConfirmedShifts,
+		subscribeMonthlyConfirmedShifts,
+		saveConfirmedShiftsToLocalCache,
+		loadConfirmedShiftsFromLocalCache,
 		getStaffDetails,
 		parseLocalDate
 	} from '$lib/services/shiftService';
@@ -727,9 +730,11 @@
 		currentUser?.target_monthly_income || currentUser?.targetIncomeMax || 0
 	);
 
-	// 編集用の目標希望月収・絶対上限月収ローカルステート
+	// 編集用の目標希望月収・絶対上限月収・希望日数・曜日方針ローカルステート
 	let targetMonthlyIncomeInput = $state(0);
 	let maxMonthlyIncomeInput = $state(0);
+	let preferredDaysPerWeekInput = $state(0);
+	let dayPreferencePolicyInput = $state<'ANY' | 'FIXED' | 'ROTATING'>('ANY');
 
 	// currentUserのロード時、あるいは切り替え時にローカルステートに初期値を同期
 	$effect(() => {
@@ -737,6 +742,8 @@
 			targetMonthlyIncomeInput =
 				currentUser.target_monthly_income || currentUser.targetIncomeMax || 0;
 			maxMonthlyIncomeInput = currentUser.max_monthly_income || 0;
+			preferredDaysPerWeekInput = currentUser.preferredDaysPerWeek || 0;
+			dayPreferencePolicyInput = currentUser.dayPreferencePolicy || 'ANY';
 		}
 	});
 
@@ -853,6 +860,9 @@
 		const currentMonth = targetMonth;
 		const currentUserId = userId;
 
+		// リアルタイムリスナーに読み込みを一本化 (重複fetchと空データ上書きを排除)
+		setupRealtimeShiftListener(currentYear, currentMonth);
+
 		const templatesPromise = getWeeklyTemplates(currentUserId).catch(() => weeklyTemplates);
 
 		Promise.all([
@@ -865,13 +875,9 @@
 				)
 			)
 				.then((snap) => (snap.exists() ? snap.data() : { isSubmitted: false, isUnlocked: false }))
-				.catch(() => ({ isSubmitted: false, isUnlocked: false })),
-			getMonthlyConfirmedShifts(currentYear, currentMonth).catch((err) => {
-				console.warn('Error fetching monthly confirmed shifts in background:', err);
-				return [];
-			})
+				.catch(() => ({ isSubmitted: false, isUnlocked: false }))
 		])
-			.then(async ([templates, submittalData, shifts]) => {
+			.then(async ([templates, submittalData]) => {
 				if (
 					targetYear === currentYear &&
 					targetMonth === currentMonth &&
@@ -882,7 +888,6 @@
 					}
 					isSubmitted = submittalData.isSubmitted === true;
 					userIsUnlocked = submittalData.isUnlocked === true;
-					monthlyConfirmedShifts = shifts || [];
 
 					const latestTemplates = templates || weeklyTemplates;
 
@@ -1151,9 +1156,16 @@
 		}, 3000);
 
 		try {
-			await submitMonthlyWishes(userId, targetYear, targetMonth, wishes);
+			const offDates = wishes.filter((w) => w.type === 'ng').map((w) => w.date);
+			await submitMonthlyWishes(userId, targetYear, targetMonth, wishes, {
+				offDates,
+				target_monthly_income: targetMonthlyIncomeInput,
+				max_monthly_income: maxMonthlyIncomeInput,
+				preferredDaysPerWeek: preferredDaysPerWeekInput,
+				dayPreferencePolicy: dayPreferencePolicyInput
+			});
 
-			// ユーザーの target_monthly_income, max_monthly_income および isLateSubmission を Firestore に保存・更新する
+			// ユーザーの target_monthly_income, max_monthly_income, isLateSubmission, preferredDaysPerWeek, dayPreferencePolicy を Firestore に保存・更新する
 			const userRef = doc(db, 'users', userId);
 			const isLate = isDeadlinePassed;
 			await setDoc(
@@ -1162,7 +1174,9 @@
 					target_monthly_income: targetMonthlyIncomeInput,
 					targetIncomeMax: targetMonthlyIncomeInput, // 互換性のため
 					max_monthly_income: maxMonthlyIncomeInput,
-					isLateSubmission: isLate
+					isLateSubmission: isLate,
+					preferredDaysPerWeek: preferredDaysPerWeekInput,
+					dayPreferencePolicy: dayPreferencePolicyInput
 				},
 				{ merge: true }
 			);
@@ -1174,6 +1188,8 @@
 				staffs[idx].targetIncomeMax = targetMonthlyIncomeInput;
 				staffs[idx].max_monthly_income = maxMonthlyIncomeInput;
 				staffs[idx].isLateSubmission = isLate;
+				staffs[idx].preferredDaysPerWeek = preferredDaysPerWeekInput;
+				staffs[idx].dayPreferencePolicy = dayPreferencePolicyInput;
 			}
 
 			console.log('[Firestore] Wishes and target monthly income submitted successfully');
@@ -1197,8 +1213,48 @@
 			});
 	}
 
+	let unsubscribeShiftListener: (() => void) | null = null;
+
+	function setupRealtimeShiftListener(year: number, month: number) {
+		if (unsubscribeShiftListener) {
+			unsubscribeShiftListener();
+			unsubscribeShiftListener = null;
+		}
+
+		// 1. ローカルキャッシュから最速復元 (0ms)
+		const cached = loadConfirmedShiftsFromLocalCache(year, month);
+		if (cached && Object.keys(cached).length > 0) {
+			const hasAssignments = Object.values(cached).some(
+				(s) => s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)
+			);
+			if (hasAssignments) {
+				monthlyConfirmedShifts = Object.values(cached);
+				console.log('[Staff Realtime Sync] Restored non-empty shifts from local cache.');
+			}
+		}
+
+		// 2. リアルタイムリスナー起動 (onSnapshot)
+		try {
+			unsubscribeShiftListener = subscribeMonthlyConfirmedShifts(year, month, (shifts) => {
+				if (shifts && shifts.length > 0) {
+					monthlyConfirmedShifts = shifts;
+					const map: { [d: string]: DailyShift } = {};
+					shifts.forEach((s) => (map[s.date] = s));
+					saveConfirmedShiftsToLocalCache(year, month, map);
+					console.log('[Staff Realtime Sync] Updated confirmed shifts via onSnapshot:', shifts.length);
+				} else {
+					console.log('[Staff Realtime Sync Safe Guard] Received empty shifts from Firestore. Keeping existing state.');
+				}
+			});
+		} catch (err) {
+			console.warn('[Staff Realtime Sync] Listener setup failed:', err);
+		}
+	}
+
 	// 初期ロード
 	onMount(() => {
+		setupRealtimeShiftListener(targetYear, targetMonth);
+
 		(async () => {
 			try {
 				const loadedStaffs = await getStaffDetails(staffs);
@@ -1218,7 +1274,12 @@
 			}
 		}, 60000);
 
-		return () => clearInterval(interval);
+		return () => {
+			clearInterval(interval);
+			if (unsubscribeShiftListener) {
+				unsubscribeShiftListener();
+			}
+		};
 	});
 </script>
 
@@ -1663,6 +1724,43 @@
 								/>
 								<span class="ml-1 text-[10px] font-bold text-slate-500">円</span>
 							</div>
+						</div>
+					</div>
+
+					<!-- 構造化希望設定 (希望日数 ＆ 曜日方針) -->
+					<div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+						<!-- 希望日数 (preferredDaysPerWeek) -->
+						<div class="space-y-2 rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 shadow-xs">
+							<label class="block text-xs font-extrabold text-slate-800" for="preferred-days-select">
+								🗓️ 週の希望勤務日数
+							</label>
+							<select
+								id="preferred-days-select"
+								bind:value={preferredDaysPerWeekInput}
+								class="w-full rounded-xl border border-slate-200/80 bg-white p-2.5 font-sans text-xs font-bold text-slate-700 focus:border-indigo-400 focus:outline-none"
+							>
+								<option value={0}>指定なし（状況に応じて調整）</option>
+								<option value={1}>週1日希望</option>
+								<option value={2}>週2日希望</option>
+								<option value={3}>週3日希望</option>
+								<option value={4}>週4日希望</option>
+							</select>
+						</div>
+
+						<!-- 曜日のこだわり (dayPreferencePolicy) -->
+						<div class="space-y-2 rounded-2xl border border-slate-200/80 bg-slate-50/50 p-4 shadow-xs">
+							<label class="block text-xs font-extrabold text-slate-800" for="day-policy-select">
+								🔄 曜日のこだわり方針
+							</label>
+							<select
+								id="day-policy-select"
+								bind:value={dayPreferencePolicyInput}
+								class="w-full rounded-xl border border-slate-200/80 bg-white p-2.5 font-sans text-xs font-bold text-slate-700 focus:border-indigo-400 focus:outline-none"
+							>
+								<option value="ANY">こだわりなし（おまかせ）</option>
+								<option value="FIXED">同じ曜日固定（毎回同じ曜日に配置）</option>
+								<option value="ROTATING">違う曜日分散（週ごとに違う曜日に分散）</option>
+							</select>
 						</div>
 					</div>
 

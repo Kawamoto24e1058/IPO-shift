@@ -7,9 +7,12 @@ import {
 	where,
 	writeBatch,
 	setDoc,
+	onSnapshot,
+	type Unsubscribe,
 	Timestamp
 } from 'firebase/firestore';
 import { db } from '$lib/firebase';
+import type { DailyShift, Staff } from '$lib/services/autoShiftService';
 
 export interface WeeklyTemplate {
 	dayOfWeek: number; // 0: 日曜日, 1: 月曜日, ..., 6: 土曜日
@@ -69,18 +72,23 @@ export async function saveWeeklyTemplates(
  * 曜日ごとの時間割（テンプレート）を取得する
  */
 export async function getWeeklyTemplates(userId: string): Promise<WeeklyTemplate[]> {
-	const q = query(collection(db, 'weekly_templates'), where('userId', '==', userId));
-	const snapshot = await getDocs(q);
+	try {
+		const q = query(collection(db, 'weekly_templates'), where('userId', '==', userId));
+		const snapshot = await withTimeout(getDocs(q), 2000);
 
-	return snapshot.docs.map((d) => {
-		const data = d.data();
-		return {
-			dayOfWeek: Number(data.dayOfWeek),
-			type: data.type,
-			startTime: data.startTime,
-			endTime: data.endTime
-		};
-	});
+		return snapshot.docs.map((d) => {
+			const data = d.data();
+			return {
+				dayOfWeek: Number(data.dayOfWeek),
+				type: data.type,
+				startTime: data.startTime,
+				endTime: data.endTime
+			};
+		});
+	} catch (err) {
+		console.warn('[ShiftService] getWeeklyTemplates query timed out or failed:', err);
+		return [];
+	}
 }
 
 /**
@@ -286,21 +294,58 @@ export async function checkIsLocked(
 }
 
 /**
- * 対象月のシフト希望を最終提出し、submittalsコレクションにステータスを保存する
- * また、その月の全wishesドキュメントのisSubmittedをtrueに一括更新する
+ * 対象月のシフト希望を最終提出し、wishes/{yearMonth}_{userId} および submittalsコレクションにステータスを保存する
  */
 export async function submitMonthlyWishes(
 	userId: string,
 	year: number,
 	month: number,
-	wishes: Wish[]
+	wishes: Wish[],
+	extraData?: {
+		offDates?: string[];
+		target_monthly_income?: number;
+		max_monthly_income?: number;
+		preferredDaysPerWeek?: number;
+		dayPreferencePolicy?: string;
+	}
 ): Promise<void> {
-	const batch = writeBatch(db);
+	const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+	const mainWishDocId = `${yearMonth}_${userId}`;
+	const mainWishRef = doc(db, 'wishes', mainWishDocId);
 
-	// 1. submittals コレクションに提出済みステータスを保存
-	const submittalDocId = `${userId}_${year}_${String(month).padStart(2, '0')}`;
-	const submittalRef = doc(db, 'submittals', submittalDocId);
-	batch.set(submittalRef, {
+	const wishesMap: { [dateStr: string]: Wish } = {};
+	const offDates: string[] = [];
+
+	wishes.forEach((w) => {
+		wishesMap[w.date] = w;
+		if (w.type === 'ng') {
+			offDates.push(w.date);
+		}
+	});
+
+	// 1. 統一仕様である wishes/${yearMonth}_${userId} ドキュメントに一括保存
+	await setDoc(
+		mainWishRef,
+		{
+			userId,
+			yearMonth,
+			wishes: wishesMap,
+			wishesList: wishes,
+			offDates: extraData?.offDates || offDates,
+			target_monthly_income: extraData?.target_monthly_income || 0,
+			max_monthly_income: extraData?.max_monthly_income || 0,
+			preferredDaysPerWeek: extraData?.preferredDaysPerWeek || 0,
+			dayPreferencePolicy: extraData?.dayPreferencePolicy || 'ANY',
+			isSubmitted: true,
+			updatedAt: Timestamp.now()
+		},
+		{ merge: true }
+	);
+
+	// 2. 互換性のための submittals および個別 wishes/${userId}_${date} の書き込み
+	const batch = writeBatch(db);
+	const submittalDocId = `${userId}_${yearMonth}`;
+	batch.set(doc(db, 'submittals', submittalDocId), {
 		userId,
 		year,
 		month,
@@ -308,12 +353,10 @@ export async function submitMonthlyWishes(
 		submittedAt: Timestamp.now()
 	});
 
-	// 2. wishes コレクション内の各希望ドキュメントの isSubmitted を true に更新して保存
 	wishes.forEach((w) => {
 		const docId = `${userId}_${w.date}`;
-		const docRef = doc(db, 'wishes', docId);
 		batch.set(
-			docRef,
+			doc(db, 'wishes', docId),
 			{
 				userId,
 				date: w.date,
@@ -340,27 +383,21 @@ export async function getSubmitStatus(
 	month: number
 ): Promise<boolean> {
 	try {
-		const submittalDocId = `${userId}_${year}_${String(month).padStart(2, '0')}`;
-		const docRef = doc(db, 'submittals', submittalDocId);
-		const snap = await getDoc(docRef);
-		if (snap.exists()) {
-			const data = snap.data();
-			return data.isSubmitted === true;
+		const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+		const submittalDocId = `${userId}_${yearMonth}`;
+		const docSnap = await getDoc(doc(db, 'submittals', submittalDocId));
+
+		if (docSnap.exists()) {
+			return !!docSnap.data()?.isSubmitted;
 		}
-	} catch (error: any) {
-		if (error.message?.includes('offline') || error.code?.includes('offline')) {
-			console.warn(
-				'[Offline] Submit status check fell back to false (cache/offline):',
-				error.message
-			);
-		} else {
-			console.error('Error getting submit status:', error);
-		}
+	} catch (err) {
+		console.warn('Firestore getSubmitStatus query skipped or failed:', err);
 	}
+
 	return false;
 }
 
-import type { DailyShift, Staff } from './autoShiftService';
+
 
 /**
  * 確定シフトを Firestore (confirmed_shifts コレクション) に保存する
@@ -390,13 +427,66 @@ export async function getConfirmedShift(date: string): Promise<DailyShift | null
 	return null;
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms = 2000): Promise<T> {
+	const timeout = new Promise<never>((_, reject) =>
+		setTimeout(() => reject(new Error(`Firestore operation timeout after ${ms}ms`)), ms)
+	);
+	return Promise.race([promise, timeout]);
+}
+
 /**
- * 対象月のすべての確定シフトを Firestore から一括取得する
+ * 月全体の確定シフトデータを一括取得する (shifts/{yearMonth} を優先取得)
  */
 export async function getMonthlyConfirmedShifts(
 	year: number,
 	month: number
 ): Promise<DailyShift[]> {
+	const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+
+	try {
+		const docSnap = await withTimeout(getDoc(doc(db, 'shifts', yearMonth)), 1200);
+		if (docSnap && docSnap.exists()) {
+			const data = docSnap.data();
+			const assignments = data.assignments || {};
+			const list = Object.values(assignments).filter(
+				(s: any) => s && s.slots && Object.values(s.slots).some((arr: any) => Array.isArray(arr) && arr.length > 0)
+			) as DailyShift[];
+			if (list.length > 0) {
+				return list;
+			}
+		}
+
+		// フォールバック: confirmed_shifts コレクション
+		const startDateStr = `${yearMonth}-01`;
+		const lastDay = new Date(year, month, 0).getDate();
+		const endDateStr = `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
+		const q = query(
+			collection(db, 'confirmed_shifts'),
+			where('date', '>=', startDateStr),
+			where('date', '<=', endDateStr)
+		);
+		const snapshot = await withTimeout(getDocs(q), 2000);
+		return snapshot.docs.map((d) => {
+			const data = d.data();
+			return {
+				date: data.date,
+				slots: data.slots
+			};
+		});
+	} catch (err) {
+		console.warn('[ShiftService] getMonthlyConfirmedShifts query timed out or failed:', err);
+		return [];
+	}
+}
+
+/**
+ * 対象月の確定シフトのリアルタイム監視 (onSnapshot)
+ */
+export function subscribeMonthlyConfirmedShifts(
+	year: number,
+	month: number,
+	callback: (shifts: DailyShift[]) => void
+): Unsubscribe {
 	const startDateStr = `${year}-${String(month).padStart(2, '0')}-01`;
 	const lastDay = new Date(year, month, 0).getDate();
 	const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
@@ -406,20 +496,79 @@ export async function getMonthlyConfirmedShifts(
 		where('date', '>=', startDateStr),
 		where('date', '<=', endDateStr)
 	);
-	const snapshot = await getDocs(q);
-	return snapshot.docs.map((d) => {
-		const data = d.data();
-		return {
-			date: data.date,
-			slots: data.slots
-		};
-	});
+
+	return onSnapshot(
+		q,
+		(snapshot) => {
+			if (snapshot.empty) {
+				console.log('[ShiftService Safe Guard] No persisted shift found in Firestore yet. Keeping local staging state.');
+				return;
+			}
+
+			const shifts: DailyShift[] = snapshot.docs
+				.map((d) => {
+					const data = d.data();
+					return {
+						date: data.date,
+						slots: data.slots || {},
+						unassignedStaffs: data.unassignedStaffs || []
+					};
+				})
+				.filter((s) => s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0));
+
+			if (shifts.length === 0) {
+				console.log('[ShiftService Safe Guard] Firestore returned empty shift slots. Keeping local staging state.');
+				return;
+			}
+
+			callback(shifts);
+		},
+		(err) => {
+			console.warn('[ShiftService] onSnapshot listener error:', err);
+		}
+	);
+}
+
+/**
+ * 確定シフトのローカルストレージ高速永続化
+ */
+export function saveConfirmedShiftsToLocalCache(
+	year: number,
+	month: number,
+	shiftsMap: { [dateStr: string]: DailyShift }
+) {
+	if (typeof window === 'undefined') return;
+	const key = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
+	try {
+		localStorage.setItem(key, JSON.stringify(shiftsMap));
+	} catch (e) {
+		console.warn('[ShiftService] Failed to save shifts to local cache:', e);
+	}
+}
+
+export function loadConfirmedShiftsFromLocalCache(
+	year: number,
+	month: number
+): { [dateStr: string]: DailyShift } | null {
+	if (typeof window === 'undefined') return null;
+	const key = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
+	const raw = localStorage.getItem(key);
+	if (!raw) return null;
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return null;
+	}
 }
 
 /**
  * 確定シフトデータを Notion にバックグラウンドで自動同期する（保険・データ破損対策の完全実装）
  */
 export async function backupToNotion(dailyShift: DailyShift): Promise<boolean> {
+	if (typeof window !== 'undefined' && !navigator.onLine) {
+		console.log(`[Notion Backup Skipped] Client is offline.`);
+		return false;
+	}
 	console.log(`[Notion Backup Triggered] Date: ${dailyShift.date}`);
 	try {
 		// 1. タイムライン上の slots から、その日勤務するユニークな staffId を抽出
@@ -442,35 +591,47 @@ export async function backupToNotion(dailyShift: DailyShift): Promise<boolean> {
 			console.log(
 				`[Notion Backup] No assignments on ${dailyShift.date}. Clearing Notion database entries for this date.`
 			);
-			const response = await fetch('/api/notion/confirmed', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ date: dailyShift.date, records: [] })
-			});
-			return response.ok;
+			try {
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), 2000);
+				const response = await fetch('/api/notion/confirmed', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ date: dailyShift.date, records: [] }),
+					signal: controller.signal
+				});
+				clearTimeout(timeoutId);
+				return response.ok;
+			} catch {
+				return false;
+			}
 		}
 
-		// 2. Firestore の users コレクションから各スタッフの `notion_person_id` と `uid` を並行取得
+		// 2. Firestore の users コレクションから各スタッフ情報を取得 (短時間タイムアウト付き)
 		const staffDocs = await Promise.all(
 			staffIdList.map(async (staffId) => {
 				try {
 					const userDocRef = doc(db, 'users', staffId);
-					const snap = await getDoc(userDocRef);
-					if (snap.exists()) {
+					const snapPromise = getDoc(userDocRef);
+					const timeoutPromise = new Promise<null>((_, reject) =>
+						setTimeout(() => reject(new Error('timeout')), 800)
+					);
+					const snap = (await Promise.race([snapPromise, timeoutPromise])) as any;
+					if (snap && snap.exists()) {
 						const data = snap.data();
 						return {
 							staffId,
-							name: data.name || '',
+							name: data.name || staffNameMap.get(staffId) || '',
 							notion_person_id: data.notion_person_id || null,
 							uid: data.uid || staffId
 						};
 					}
 				} catch (e) {
-					console.warn(`[Notion Backup] Failed to fetch Firestore user details for ${staffId}:`, e);
+					// タイムアウトまたはオフライン時はメモリ内の名前をフォールバック利用
 				}
 				return {
 					staffId,
-					name: '',
+					name: staffNameMap.get(staffId) || '',
 					notion_person_id: null,
 					uid: staffId
 				};
@@ -704,15 +865,15 @@ export async function saveStaffDetails(staff: Staff): Promise<void> {
  * もし Firestore の users コレクションが空の場合は、シードデータ（デフォルト）を自動保存して返す
  */
 export async function getStaffDetails(fallbackStaffs?: Staff[]): Promise<Staff[]> {
+	if (typeof window !== 'undefined' && !navigator.onLine) {
+		console.log('[ShiftService] Client is offline, returning fallback staff list.');
+		return fallbackStaffs || [];
+	}
 	try {
 		const q = collection(db, 'users');
-		const snapshot = await getDocs(q);
+		const snapshot = await withTimeout(getDocs(q), 800);
 
 		if (snapshot.empty && fallbackStaffs && fallbackStaffs.length > 0) {
-			// データベースが空の場合はデフォルト値をシード保存する
-			for (const s of fallbackStaffs) {
-				await saveStaffDetails(s);
-			}
 			return fallbackStaffs;
 		}
 
@@ -744,7 +905,9 @@ export async function getStaffDetails(fallbackStaffs?: Staff[]): Promise<Staff[]
 				uid: data.uid || data.id || d.id,
 				is_trainee: !!(data.is_trainee || data.isTrainee),
 				isTrainee: !!(data.is_trainee || data.isTrainee),
-				isLateSubmission: !!data.isLateSubmission
+				isLateSubmission: !!data.isLateSubmission,
+				preferredDaysPerWeek: Number(data.preferredDaysPerWeek) || 0,
+				dayPreferencePolicy: (data.dayPreferencePolicy as any) || 'ANY'
 			};
 		});
 	} catch (err) {
@@ -779,4 +942,55 @@ export async function getDailyWishes(dateStr: string): Promise<{ [staffId: strin
 		console.warn(`[shiftService] Failed to load wishes for date ${dateStr}:`, err);
 		return {};
 	}
+}
+
+/**
+ * 対象月の全スタッフの希望（wishes）のリアルタイム監視 (onSnapshot)
+ * wishes/${yearMonth}_${userId} ドキュメント群をリアルタイム取得する
+ */
+export function subscribeMonthlyWishes(
+	year: number,
+	month: number,
+	callback: (wishesDocs: Array<{
+		userId: string;
+		yearMonth: string;
+		wishes: { [dateStr: string]: Wish };
+		offDates: string[];
+		target_monthly_income: number;
+		max_monthly_income: number;
+		preferredDaysPerWeek: number;
+		dayPreferencePolicy: string;
+		isSubmitted: boolean;
+	}>) => void
+): Unsubscribe {
+	const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+	const q = query(
+		collection(db, 'wishes'),
+		where('yearMonth', '==', yearMonth)
+	);
+
+	return onSnapshot(
+		q,
+		(snapshot) => {
+			const docsData = snapshot.docs.map((d) => {
+				const data = d.data();
+				return {
+					userId: data.userId || d.id.split('_').slice(1).join('_'),
+					yearMonth: data.yearMonth || yearMonth,
+					wishes: data.wishes || {},
+					offDates: data.offDates || [],
+					target_monthly_income: data.target_monthly_income || 0,
+					max_monthly_income: data.max_monthly_income || 0,
+					preferredDaysPerWeek: Number(data.preferredDaysPerWeek) || 0,
+					dayPreferencePolicy: data.dayPreferencePolicy || 'ANY',
+					isSubmitted: data.isSubmitted !== undefined ? data.isSubmitted : true
+				};
+			});
+
+			callback(docsData);
+		},
+		(err) => {
+			console.warn('[ShiftService] subscribeMonthlyWishes onSnapshot listener error:', err);
+		}
+	);
 }

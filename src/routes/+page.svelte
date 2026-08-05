@@ -1,12 +1,13 @@
 <!-- src/routes/+page.svelte -->
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { fade, scale } from 'svelte/transition';
 	import { authState } from '../lib/services/authService.svelte.ts';
 
 	// ログアウト処理
 	async function handleLogout() {
 		await authState.logout();
-		window.location.href = '/login';
+		goto('/login');
 	}
 </script>
 
@@ -26,6 +27,11 @@
 				</span>
 				<span class="rounded-full bg-slate-200/80 px-2 py-0.5 text-[9px] font-bold text-slate-600">
 					v2.0
+				</span>
+				<span
+					class="rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-600"
+				>
+					⚡️ 端末自動ログイン有効
 				</span>
 				{#if authState.isOfflineMode}
 					<span

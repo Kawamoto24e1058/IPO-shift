@@ -1,5 +1,6 @@
 <!-- src/routes/login/+page.svelte -->
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { authState } from '../../lib/services/authService.svelte.ts';
@@ -24,7 +25,7 @@
 	onMount(() => {
 		// 既にログイン済みの場合はトップへ
 		if (authState.user && !authState.loading) {
-			window.location.href = '/';
+			goto('/');
 		}
 	});
 
@@ -33,8 +34,8 @@
 		if (authState.user) {
 			successMessage = `ようこそ、${authState.user.name} さん！`;
 			setTimeout(() => {
-				window.location.href = '/';
-			}, 1000);
+				goto('/');
+			}, 800);
 		}
 	});
 
@@ -72,7 +73,7 @@
 				registerName,
 				registerRole
 			);
-			successMessage = '新規登録が完了しました！';
+			successMessage = '新規登録が完了しました！この端末で次回から爆速自動ログインされます ⚡️';
 		} catch (e: any) {
 			errorMessage = e.message || '登録に失敗しました。';
 		} finally {
@@ -93,13 +94,20 @@
 	>
 		<!-- アプリロゴ -->
 		<div class="space-y-2 text-center">
-			<span
-				class="rounded-full border border-indigo-100/80 bg-indigo-50 px-3 py-1 text-[10px] font-bold tracking-wider text-indigo-600 uppercase"
-			>
-				🔐 IPO Shift Portal
-			</span>
+			<div class="flex items-center justify-center gap-2">
+				<span
+					class="rounded-full border border-indigo-100/80 bg-indigo-50 px-3 py-1 text-[10px] font-bold tracking-wider text-indigo-600 uppercase"
+				>
+					🔐 IPO Shift Portal
+				</span>
+				<span
+					class="rounded-full border border-sky-100 bg-sky-50 px-2 py-0.5 text-[9px] font-bold text-sky-600"
+				>
+					⚡️ 爆速自動ログイン
+				</span>
+			</div>
 			<h1 class="text-3xl font-black tracking-tight text-slate-900">ログイン</h1>
-			<p class="text-xs font-medium text-slate-400">シフト希望提出 ＆ 調整管理システム</p>
+			<p class="text-xs font-medium text-slate-400">一度登録するとこの端末で爆速自動ログインされます</p>
 		</div>
 
 		<!-- 通知・エラーメッセージ -->

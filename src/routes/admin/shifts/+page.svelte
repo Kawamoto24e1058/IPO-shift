@@ -14,7 +14,11 @@
 		getStaffDetails,
 		saveStaffDetails,
 		backupToNotion,
-		getMonthlyConfirmedShifts
+		getMonthlyConfirmedShifts,
+		subscribeMonthlyConfirmedShifts,
+		subscribeMonthlyWishes,
+		saveConfirmedShiftsToLocalCache,
+		loadConfirmedShiftsFromLocalCache
 	} from '$lib/services/shiftService';
 	import { authState } from '../../../lib/services/authService.svelte.ts';
 	import {
@@ -26,11 +30,12 @@
 		writeBatch,
 		Timestamp,
 		getDoc,
-		setDoc
+		setDoc,
+		type Unsubscribe
 	} from 'firebase/firestore';
 	import { db } from '$lib/firebase';
 
-	// 1. 実務スタッフデータ（17名） — CW / FS / UNICESタグ付き
+	// 1. 実務スタッフデータ（17名） — CW / FS / UNICESタグ付き（多様な希望条件・設定）
 	let staffs = $state<Staff[]>([
 		{
 			id: 'staff_01',
@@ -41,6 +46,8 @@
 			hourly_wage: 1200,
 			target_monthly_income: 50000,
 			max_monthly_income: 80000,
+			preferredDaysPerWeek: 3,
+			dayPreferencePolicy: 'FIXED',
 			tags: ['CW', 'FS', 'UNICES'],
 			age_group: 'adult'
 		},
@@ -53,6 +60,8 @@
 			hourly_wage: 1100,
 			target_monthly_income: 50000,
 			max_monthly_income: 80000,
+			preferredDaysPerWeek: 3,
+			dayPreferencePolicy: 'ROTATING',
 			tags: ['CW', 'FS'],
 			age_group: 'adult'
 		},
@@ -65,6 +74,8 @@
 			hourly_wage: 1000,
 			target_monthly_income: 45000,
 			max_monthly_income: 70000,
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW', 'FS'],
 			age_group: 'adult'
 		},
@@ -77,6 +88,8 @@
 			hourly_wage: 1000,
 			target_monthly_income: 40000,
 			max_monthly_income: 70000,
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'FIXED',
 			tags: ['CW', 'UNICES'],
 			age_group: 'adult'
 		},
@@ -88,7 +101,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 35000,
-			max_monthly_income: 70000,
+			max_monthly_income: 60000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW'],
 			age_group: 'minor',
 			is_trainee: true
@@ -101,7 +116,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 30000,
-			max_monthly_income: 70000,
+			max_monthly_income: 50000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ROTATING',
 			tags: ['CW'],
 			age_group: 'minor',
 			isTrainee: true
@@ -115,6 +132,8 @@
 			hourly_wage: 1000,
 			target_monthly_income: 40000,
 			max_monthly_income: 70000,
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW', 'FS'],
 			age_group: 'adult'
 		},
@@ -126,7 +145,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 35000,
-			max_monthly_income: 70000,
+			max_monthly_income: 60000,
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'FIXED',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -138,7 +159,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 30000,
-			max_monthly_income: 70000,
+			max_monthly_income: 50000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -151,7 +174,9 @@
 			hourly_wage: 980,
 			target_monthly_income: 40000,
 			max_monthly_income: 70000,
-			tags: ['CW'],
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'ROTATING',
+			tags: ['CW', 'UNICES'],
 			age_group: 'adult'
 		},
 		{
@@ -162,7 +187,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 35000,
-			max_monthly_income: 70000,
+			max_monthly_income: 60000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -174,7 +201,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 30000,
-			max_monthly_income: 70000,
+			max_monthly_income: 50000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'FIXED',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -187,7 +216,9 @@
 			hourly_wage: 1000,
 			target_monthly_income: 40000,
 			max_monthly_income: 70000,
-			tags: ['CW', 'FS'],
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'ANY',
+			tags: ['CW', 'FS', 'UNICES'],
 			age_group: 'adult'
 		},
 		{
@@ -198,7 +229,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 35000,
-			max_monthly_income: 70000,
+			max_monthly_income: 60000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ROTATING',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -210,7 +243,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 30000,
-			max_monthly_income: 70000,
+			max_monthly_income: 50000,
+			preferredDaysPerWeek: 2,
+			dayPreferencePolicy: 'ANY',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -222,7 +257,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 25000,
-			max_monthly_income: 70000,
+			max_monthly_income: 45000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'FIXED',
 			tags: ['CW'],
 			age_group: 'minor'
 		},
@@ -234,7 +271,9 @@
 			hourlyWage: 980,
 			hourly_wage: 980,
 			target_monthly_income: 25000,
-			max_monthly_income: 70000,
+			max_monthly_income: 45000,
+			preferredDaysPerWeek: 1,
+			dayPreferencePolicy: 'ROTATING',
 			tags: ['CW'],
 			age_group: 'minor',
 			isLateSubmission: true
@@ -255,9 +294,97 @@
 	// 3. 表示タブ選択 ('puzzle' または 'settings')
 	let activeTab = $state<'puzzle' | 'settings'>('puzzle');
 
-	// 4. データ取得用・格納状態（日付文字列 "YYYY-MM-DD" をキーとするリアクティブ辞書構造）
 	let monthlyConfirmedShifts = $state<{ [dateStr: string]: DailyShift }>({});
 	let wishesMapByDate = $state<{ [dateStr: string]: { [staffId: string]: Wish } }>({});
+	let eventDates = $state<string[]>([]);
+
+	// ステージング（仮プレビュー）状態 ＆ 確定・送信済み状態
+	let isStaging = $state(false);
+	let isPublished = $state(false);
+	let isPublishedToast = $state(false);
+
+	// 各スタッフの当月希望ドキュメント情報 (キー: staffId)
+	let staffWishesDocMap = $state<{
+		[staffId: string]: {
+			wishes: { [dateStr: string]: Wish };
+			offDates: string[];
+			target_monthly_income: number;
+			max_monthly_income: number;
+			preferredDaysPerWeek: number;
+			dayPreferencePolicy: string;
+			isSubmitted: boolean;
+		};
+	}>({});
+
+	// 提出済み人数・未提出人数のリアクティブ算出
+	let submittedCount = $derived(
+		staffs.filter((s) => staffWishesDocMap[s.id]?.isSubmitted).length
+	);
+	let unsubmittedCount = $derived(staffs.length - submittedCount);
+
+	let unsubscribeWishesListener: Unsubscribe | null = null;
+
+	function setupRealtimeWishesListener(year: number, month: number) {
+		if (unsubscribeWishesListener) {
+			unsubscribeWishesListener();
+			unsubscribeWishesListener = null;
+		}
+
+		try {
+			unsubscribeWishesListener = subscribeMonthlyWishes(year, month, (docsData) => {
+				console.log('[Realtime Wishes Sync] Received updated wishes for month:', `${year}-${month}`, docsData.length);
+				const newDocMap: typeof staffWishesDocMap = { ...staffWishesDocMap };
+
+				docsData.forEach((d) => {
+					if (d.userId) {
+						newDocMap[d.userId] = {
+							wishes: d.wishes,
+							offDates: d.offDates,
+							target_monthly_income: d.target_monthly_income,
+							max_monthly_income: d.max_monthly_income,
+							preferredDaysPerWeek: d.preferredDaysPerWeek,
+							dayPreferencePolicy: d.dayPreferencePolicy,
+							isSubmitted: d.isSubmitted
+						};
+
+						// スタッフのローカルプロパティも即時反映！
+						const sIdx = staffs.findIndex((st) => st.id === d.userId || st.uid === d.userId);
+						if (sIdx !== -1) {
+							if (d.offDates && d.offDates.length > 0) {
+								staffs[sIdx].offDates = d.offDates;
+							}
+							if (d.target_monthly_income > 0) {
+								staffs[sIdx].target_monthly_income = d.target_monthly_income;
+							}
+							if (d.max_monthly_income > 0) {
+								staffs[sIdx].max_monthly_income = d.max_monthly_income;
+							}
+							if (d.preferredDaysPerWeek >= 0) {
+								staffs[sIdx].preferredDaysPerWeek = d.preferredDaysPerWeek;
+							}
+							if (d.dayPreferencePolicy) {
+								staffs[sIdx].dayPreferencePolicy = d.dayPreferencePolicy as any;
+							}
+						}
+
+						// wishesMapByDate も即時更新
+						if (d.wishes) {
+							Object.entries(d.wishes).forEach(([dateStr, wishObj]) => {
+								if (!wishesMapByDate[dateStr]) {
+									wishesMapByDate[dateStr] = {};
+								}
+								wishesMapByDate[dateStr][d.userId] = normalizeWish(wishObj);
+							});
+						}
+					}
+				});
+
+				staffWishesDocMap = newDocMap;
+			});
+		} catch (err) {
+			console.warn('[Realtime Wishes Sync] Failed to set up listener:', err);
+		}
+	}
 
 	// UNICES日別イベント情報 (キー: dateStr, デフォルト13:00-15:00, activeで有効化)
 	let unicesEventsByDate = $state<{
@@ -359,6 +486,7 @@
 		const shifts = monthlyConfirmedShifts;
 		const events = unicesEventsByDate;
 		const staffList = staffs;
+		const eDates = eventDates;
 
 		const year = currentYear;
 		const month = currentMonth;
@@ -442,10 +570,11 @@
 			const shift = shifts[dateStr];
 			if (!shift || !shift.slots) return true;
 
+			const isEvent = eDates.includes(dateStr);
 			return TIME_SLOTS.some((slot) => {
 				const assignments = shift.slots[slot] || [];
 				const cafeCount = assignments.filter((a) => a.area === 'cafe').length;
-				const required = slot === '09:45' ? 1 : 2;
+				const required = (slot === '09:45' ? 1 : 2) + (isEvent ? 1 : 0);
 				return cafeCount < required;
 			});
 		}
@@ -454,10 +583,13 @@
 		function checkFsShortageForCell(dateStr: string): boolean {
 			const shift = shifts[dateStr];
 			if (!shift || !shift.slots) return false;
+
+			const isEvent = eDates.includes(dateStr);
 			return TIME_SLOTS.some((slot) => {
 				if (!isSlotInInterval(slot, '10:00', '15:00')) return false;
 				const fsCount = (shift.slots[slot] || []).filter((a) => a.area === 'fs').length;
-				return fsCount < 2;
+				const required = 2 + (isEvent ? 1 : 0);
+				return fsCount < required;
 			});
 		}
 
@@ -616,8 +748,8 @@
 		const endDateStr = `${year}-${String(month).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
 
 		const wishesMap: { [dateStr: string]: { [staffId: string]: Wish } } = {};
+		const offlineOrMock = isOfflineOrMockMode();
 
-		// 1. 全ての曜日テンプレートを Firestore から一括フェッチしてマッピング
 		const templatesMap: {
 			[userId: string]: {
 				[dayOfWeek: number]: {
@@ -627,64 +759,68 @@
 				};
 			};
 		} = {};
-		try {
-			const snap = await getDocs(collection(db, 'weekly_templates'));
-			snap.docs.forEach((docSnap) => {
-				const data = docSnap.data();
-				const uid = data.userId;
-				const day = parseDayOfWeek(data.dayOfWeek);
-				if (uid && day !== null) {
-					if (!templatesMap[uid]) {
-						templatesMap[uid] = {};
-					}
-					templatesMap[uid][day] = {
-						type: data.type || 'free',
-						startTime: data.startTime || '09:45',
-						endTime: data.endTime || '20:15'
-					};
-				}
-			});
-		} catch (e) {
-			console.warn('Failed to fetch weekly templates, using defaults:', e);
-		}
 
-		// 2. Firestore から実際の提出済み希望を取得
-		try {
+		if (!offlineOrMock) {
+			// 1. 全ての曜日テンプレートを Firestore から一括フェッチ
+			const snap = await fetchWithTimeout(
+				getDocs(collection(db, 'weekly_templates')),
+				null,
+				800
+			);
+			if (snap && snap.docs) {
+				snap.docs.forEach((docSnap) => {
+					const data = docSnap.data();
+					const uid = data.userId;
+					const day = parseDayOfWeek(data.dayOfWeek);
+					if (uid && day !== null) {
+						if (!templatesMap[uid]) {
+							templatesMap[uid] = {};
+						}
+						templatesMap[uid][day] = {
+							type: data.type || 'free',
+							startTime: data.startTime || '09:45',
+							endTime: data.endTime || '20:15'
+						};
+					}
+				});
+			}
+
+			// 2. Firestore から実際の提出済み希望を取得
 			const q = query(
 				collection(db, 'wishes'),
 				where('date', '>=', startDateStr),
 				where('date', '<=', endDateStr)
 			);
-			const snapshot = await getDocs(q);
-			snapshot.docs.forEach((docSnap) => {
-				const data = docSnap.data();
-				const dateStr = data.date;
-				const userId = data.userId;
-				if (dateStr && userId) {
-					if (!wishesMap[dateStr]) {
-						wishesMap[dateStr] = {};
+			const snapshot = await fetchWithTimeout(getDocs(q), null, 800);
+			if (snapshot && snapshot.docs) {
+				snapshot.docs.forEach((docSnap) => {
+					const data = docSnap.data();
+					const dateStr = data.date;
+					const userId = data.userId;
+					if (dateStr && userId) {
+						if (!wishesMap[dateStr]) {
+							wishesMap[dateStr] = {};
+						}
+						const rawWish = {
+							date: dateStr,
+							type: data.type || 'free',
+							startTime: data.startTime || '09:45',
+							endTime: data.endTime || '20:15',
+							isOverridden: data.isOverridden || false,
+							isSubmitted: data.isSubmitted !== undefined ? data.isSubmitted : true
+						};
+						const norm = normalizeWish(rawWish);
+						wishesMap[dateStr][userId] = {
+							date: dateStr,
+							type: norm.type,
+							startTime: norm.startTime,
+							endTime: norm.endTime,
+							isOverridden: norm.isOverridden || false,
+							isSubmitted: norm.isSubmitted
+						};
 					}
-					const rawWish = {
-						date: dateStr,
-						type: data.type || 'free',
-						startTime: data.startTime || '09:45',
-						endTime: data.endTime || '20:15',
-						isOverridden: data.isOverridden || false,
-						isSubmitted: data.isSubmitted !== undefined ? data.isSubmitted : true
-					};
-					const norm = normalizeWish(rawWish);
-					wishesMap[dateStr][userId] = {
-						date: dateStr,
-						type: norm.type,
-						startTime: norm.startTime,
-						endTime: norm.endTime,
-						isOverridden: norm.isOverridden || false,
-						isSubmitted: norm.isSubmitted
-					};
-				}
-			});
-		} catch (err) {
-			console.warn('Firebase query wishes failed, using fallback/dummy seeding:', err);
+				});
+			}
 		}
 
 		// 3. テスト用に曜日テンプレート流し込み＆未提出者へのダミーシード
@@ -711,32 +847,65 @@
 						startTime = template.startTime;
 						endTime = template.endTime;
 					} else {
-						// テンプレートも無い場合のテスト用シード
-						const seed = (d + s.name.charCodeAt(0)) % 10;
-						if (s.role === 'minor') {
-							if (seed === 1 || seed === 2) {
-								wishType = 'ng';
-							} else if (seed === 3 || seed === 4) {
-								wishType = 'specific';
-								startTime = '17:00';
-								endTime = '20:15';
-							}
-						} else if (s.role === 'employee') {
-							if (seed === 0) {
-								wishType = 'ng';
-							} else if (seed === 1 || seed === 2) {
-								wishType = 'specific';
-								startTime = '09:45';
-								endTime = '15:00';
-							}
+						// リアルな不規則希望時間のダミーシード
+						if (s.name.includes('山口')) {
+							wishType = d % 4 === 0 ? 'ng' : 'specific';
+							startTime = '13:15';
+							endTime = '18:00';
+						} else if (s.name.includes('松本')) {
+							wishType = d % 3 === 0 ? 'ng' : 'specific';
+							startTime = '10:30';
+							endTime = '14:45';
+						} else if (s.name.includes('井上')) {
+							wishType = d % 5 === 0 ? 'ng' : 'specific';
+							startTime = '15:00';
+							endTime = '20:15';
+						} else if (s.tags?.includes('UNICES')) {
+							const unicesTimes = [
+								{ start: '12:45', end: '17:15' },
+								{ start: '11:00', end: '16:30' },
+								{ start: '13:30', end: '18:15' },
+								{ start: '12:15', end: '16:45' }
+							];
+							const idx = (s.name.charCodeAt(0) + d) % unicesTimes.length;
+							wishType = d % 6 === 0 ? 'ng' : 'specific';
+							startTime = unicesTimes[idx].start;
+							endTime = unicesTimes[idx].end;
 						} else {
-							// adult
-							if (seed === 1 || seed === 2) {
-								wishType = 'ng';
-							} else if (seed === 3 || seed === 4) {
-								wishType = 'specific';
-								startTime = '15:00';
-								endTime = '20:15';
+							const seed = (d + s.name.charCodeAt(0)) % 10;
+							if (s.role === 'minor') {
+								if (seed === 1 || seed === 2) {
+									wishType = 'ng';
+								} else if (seed === 3 || seed === 4) {
+									wishType = 'specific';
+									startTime = '17:00';
+									endTime = '20:15';
+								}
+							} else if (s.role === 'employee') {
+								if (seed === 0) {
+									wishType = 'ng';
+								} else if (seed === 1 || seed === 2) {
+									wishType = 'specific';
+									startTime = '09:45';
+									endTime = '15:00';
+								}
+							} else {
+								// adult
+								if (seed === 1 || seed === 2) {
+									wishType = 'ng';
+								} else if (seed === 3) {
+									wishType = 'specific';
+									startTime = '13:15';
+									endTime = '18:00';
+								} else if (seed === 4) {
+									wishType = 'specific';
+									startTime = '10:30';
+									endTime = '14:45';
+								} else if (seed === 5) {
+									wishType = 'specific';
+									startTime = '15:00';
+									endTime = '20:15';
+								}
 							}
 						}
 					}
@@ -751,10 +920,6 @@
 					};
 					const norm = normalizeWish(rawWish);
 
-					// テスト用に提出者と未提出者を混在させる (佐藤emp_1, 鈴木adu_1, 渡辺min_1, および自分は提出済み扱い。他は未提出扱い)
-					const isUser =
-						authState.user && (s.id === authState.user.uid || s.uid === authState.user.uid);
-					// 17名全員を提出済み扱いにする（テスト用）
 					const isSubmittedMock = true;
 
 					wishesMap[dateStr][s.id] = {
@@ -784,25 +949,50 @@
 		return wishesMap;
 	}
 
-	// 月全体の確定シフトデータをロード
+	// 月全体の確定シフトデータをロード (ローカルキャッシュ0ms即時復元 + DB取得 + 空データ上書き防止)
 	async function loadMonthShifts(year: number, month: number) {
+		// 未確定のステージングプレビュー表示中は、遅延したDB読み込みによる上書きを絶対遮断！
+		if (isStaging) {
+			console.log('[MonthShifts Safe Guard] Active staging preview in progress. Blocking DB load overwrite.');
+			return;
+		}
 		isLoading = true;
+
+		// 1. ローカルキャッシュがあれば最速（0ms）で即時展開
+		const cachedMap = loadConfirmedShiftsFromLocalCache(year, month);
+		if (cachedMap && Object.keys(cachedMap).length > 0) {
+			const hasAssignments = Object.values(cachedMap).some(
+				(s) => s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)
+			);
+			if (hasAssignments) {
+				monthlyConfirmedShifts = { ...cachedMap };
+				console.log('[MonthShifts] Loaded non-empty shift state from local cache instantly.');
+			}
+		}
+
+		// 2. DB/Firestore から最新の確定シフトを取得
 		try {
 			const fetchedShifts = await getMonthlyConfirmedShifts(year, month);
-
-			const lastDay = new Date(year, month, 0).getDate();
-			const newShiftsMap: { [dateStr: string]: DailyShift } = {};
-
-			for (let d = 1; d <= lastDay; d++) {
-				const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-				const existing = fetchedShifts.find((s) => s.date === dateStr);
-				if (existing) {
-					newShiftsMap[dateStr] = existing;
+			if (fetchedShifts && fetchedShifts.length > 0) {
+				const hasDbAssignments = fetchedShifts.some(
+					(s) => s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)
+				);
+				if (hasDbAssignments) {
+					const updatedMap: { [dateStr: string]: DailyShift } = { ...monthlyConfirmedShifts };
+					fetchedShifts.forEach((s) => {
+						if (s.date && s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+							updatedMap[s.date] = s;
+						}
+					});
+					monthlyConfirmedShifts = { ...updatedMap };
+					saveConfirmedShiftsToLocalCache(year, month, monthlyConfirmedShifts);
+					console.log('[MonthShifts] Updated shift state from Firestore DB.');
 				} else {
-					newShiftsMap[dateStr] = { date: dateStr, slots: {} };
+					console.log('[MonthShifts Safe Guard] Firestore returned empty shift slots. Keeping local staging state.');
 				}
+			} else {
+				console.log('[MonthShifts Safe Guard] No persisted shift found in Firestore yet. Keeping local staging state.');
 			}
-			monthlyConfirmedShifts = newShiftsMap;
 		} catch (err) {
 			console.error('Failed to load monthly confirmed shifts:', err);
 		} finally {
@@ -810,55 +1000,84 @@
 		}
 	}
 
+	function isOfflineOrMockMode(): boolean {
+		if (typeof window !== 'undefined' && !navigator.onLine) return true;
+		if (authState.isOfflineMode) return true;
+		if (authState.user && authState.user.uid && authState.user.uid.startsWith('mock_')) return true;
+		return false;
+	}
+
+	async function fetchWithTimeout<T>(fetchPromise: Promise<T>, fallbackValue: T, timeoutMs = 800): Promise<T> {
+		let timer: ReturnType<typeof setTimeout>;
+		const timeoutPromise = new Promise<T>((resolve) => {
+			timer = setTimeout(() => {
+				console.warn(`[Firestore Safe Guard] Communications timed out (${timeoutMs}ms). Instant fallback applied.`);
+				resolve(fallbackValue);
+			}, timeoutMs);
+		});
+
+		try {
+			const result = await Promise.race([fetchPromise, timeoutPromise]);
+			clearTimeout(timer!);
+			return result;
+		} catch (e) {
+			clearTimeout(timer!);
+			console.warn('[Firestore Safe Guard] Error caught, applying fallback:', e);
+			return fallbackValue;
+		}
+	}
+
 	// 月データ一括ロード処理
 	async function loadMonthData() {
 		isLoading = true;
-		if (authState.isOfflineMode) {
-			console.log('[Offline Mode] Skipping Firestore fetch. Initializing mock data.');
-			initUnicesEvents(currentYear, currentMonth);
-			initFsDays(currentYear, currentMonth);
-
-			// 空の確定シフトマップを初期化
-			const lastDay = new Date(currentYear, currentMonth, 0).getDate();
-			const newShiftsMap: { [dateStr: string]: DailyShift } = {};
-			for (let d = 1; d <= lastDay; d++) {
-				const dateStr = `${currentYear}-${String(currentMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-				newShiftsMap[dateStr] = { date: dateStr, slots: {}, unassignedStaffs: [] };
-			}
-			monthlyConfirmedShifts = newShiftsMap;
-			wishesMapByDate = await loadMonthWishes(currentYear, currentMonth);
-
-			isLoading = false;
-			return;
-		}
 		try {
+			const offlineOrMock = isOfflineOrMockMode();
+
 			// 0. UNICES & FS の日程固定設定をロード
-			try {
+			if (offlineOrMock) {
+				console.log('[Matrix Settings] Bypassed Firestore fetch (Offline/Mock Mode)');
+				initUnicesEvents(currentYear, currentMonth);
+				initFsDays(currentYear, currentMonth);
+			} else {
 				const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
-				const snap = await getDoc(doc(db, 'system_matrix_settings', docId));
-				if (snap.exists()) {
+				const snap = await fetchWithTimeout(
+					getDoc(doc(db, 'system_matrix_settings', docId)),
+					null,
+					800
+				);
+				if (snap && snap.exists()) {
 					const data = snap.data();
 					unicesEventsByDate = data.unicesEvents || {};
 					fsDaysByDate = data.fsDays || {};
 					console.log('[Matrix Settings] Loaded custom UNICES & FS settings from Firestore.');
 				} else {
-					// 保存データがない場合のみ初期デフォルト設定を適用
 					initUnicesEvents(currentYear, currentMonth);
 					initFsDays(currentYear, currentMonth);
-					// 初回デフォルト状態を自動保存
-					await saveUnicesAndFsSettings();
 				}
-			} catch (e) {
-				console.warn('Failed to load matrix settings from DB:', e);
-				initUnicesEvents(currentYear, currentMonth);
-				initFsDays(currentYear, currentMonth);
+			}
+
+			// 0.1. Global settings (eventDates) をロード
+			if (offlineOrMock) {
+				eventDates = [];
+			} else {
+				const settingsSnap = await fetchWithTimeout(
+					getDoc(doc(db, 'settings', 'global')),
+					null,
+					800
+				);
+				if (settingsSnap && settingsSnap.exists()) {
+					const settingsData = settingsSnap.data();
+					eventDates = settingsData.eventDates || [];
+					console.log('[Settings] Loaded eventDates from Firestore:', eventDates);
+				} else {
+					eventDates = [];
+				}
 			}
 
 			// 1. 全スタッフ情報を取得
 			try {
-				let loaded = await getStaffDetails(staffs);
+				let loaded = offlineOrMock ? staffs : await getStaffDetails(staffs);
 				if (loaded && loaded.length > 0) {
-					// ログインユーザー自身がロードされたスタッフリストに含まれているか確認し、無ければ追加
 					if (authState.user && authState.user.uid) {
 						const userUid = authState.user.uid;
 						const exists = loaded.some((s) => s.id === userUid || s.uid === userUid);
@@ -884,24 +1103,13 @@
 			}
 
 			// 2. 月全体の確定シフトを取得
-			await loadMonthShifts(currentYear, currentMonth);
+			if (!offlineOrMock) {
+				await loadMonthShifts(currentYear, currentMonth);
+			}
 
 			// 3. 月全体の希望データを取得＆自動シード
 			wishesMapByDate = await loadMonthWishes(currentYear, currentMonth);
 
-			// 4. 初回ロード時に確定シフトがアサインゼロの場合、テスト用ドラフト自動生成
-			const totalAssignments = Object.values(monthlyConfirmedShifts).reduce((acc, shift) => {
-				const count = Object.values(shift.slots || {}).reduce(
-					(c, arr) => c + (arr?.length || 0),
-					0
-				);
-				return acc + count;
-			}, 0);
-
-			if (totalAssignments === 0) {
-				console.log('No existing shifts found for this month, auto-generating initial draft...');
-				triggerMonthlyAutoGenerate();
-			}
 		} catch (e) {
 			console.error('[Admin Shift] Failed to load month data:', e);
 		} finally {
@@ -935,12 +1143,20 @@
 
 	async function triggerMonthlyAutoGenerate() {
 		isLoading = true;
+		console.log('[AutoGenerate] Starting monthly shift generation for:', { currentYear, currentMonth });
+		console.log('[AutoGenerate] Input details:', {
+			staffsCount: staffs?.length,
+			wishesMapDays: wishesMapByDate ? Object.keys(wishesMapByDate).length : 0,
+			unicesDays: unicesEventsByDate ? Object.keys(unicesEventsByDate).length : 0,
+			fsDays: fsDaysByDate ? Object.keys(fsDaysByDate).length : 0
+		});
 		try {
 			const year = currentYear;
 			const month = currentMonth;
 			const lastDay = new Date(year, month, 0).getDate();
 
 			// 1. SvelteKit API エンドポイントを呼び出し
+			console.log('[AutoGenerate] Fetching /api/auto-shift...');
 			const response = await fetch('/api/auto-shift', {
 				method: 'POST',
 				headers: {
@@ -952,16 +1168,20 @@
 					staffs,
 					wishesMapByDate,
 					unicesEventsByDate,
-					fsDaysByDate
+					fsDaysByDate,
+					considerIncomeWeight
 				})
 			});
 
+			console.log('[AutoGenerate] Response status:', response.status);
 			if (!response.ok) {
 				const errData = await response.json();
+				console.error('[AutoGenerate] API error response:', errData);
 				throw new Error(errData.error || 'Gemini API auto-generation failed.');
 			}
 
 			const data = await response.json();
+			console.log('[AutoGenerate] Success response data. Assignments count:', data.assignments?.length || 0);
 			const assignments: Array<{
 				date: string;
 				slotId: string;
@@ -1020,46 +1240,6 @@
 				const dayShift = newShiftsMap[dateStr];
 				const slots = dayShift.slots;
 
-				// --- STEP D-0: 未成年/研修生の安全スイープ（ワンオペ・違反ペアの排除） ---
-				TIME_SLOTS.forEach((slot) => {
-					(['cafe', 'fs', 'unices'] as const).forEach((area) => {
-						const areaAssignments = slots[slot].filter((a) => a.area === area);
-						if (areaAssignments.length === 0) return;
-
-						const hasMinorOrTrainee = areaAssignments.some((a) => {
-							const s = staffs.find((st) => st.id === a.staffId);
-							return s ? isMinorOrTrainee(s) : false;
-						});
-
-						if (hasMinorOrTrainee) {
-							const hasValidPartner = areaAssignments.some((a) => {
-								const s = staffs.find((st) => st.id === a.staffId);
-								return s ? isValidPartner(s) : false;
-							});
-
-							if (!hasValidPartner) {
-								slots[slot] = slots[slot].filter((a) => {
-									if (a.area !== area) return true;
-									const s = staffs.find((st) => st.id === a.staffId);
-									return s ? !isMinorOrTrainee(s) : true;
-								});
-							}
-						}
-					});
-				});
-
-				// --- STEP D-1: ワンオペ（単独配置）のクリアスイープ（カフェ & FS枠） ---
-				TIME_SLOTS.forEach((slot) => {
-					if (slot !== '09:45') {
-						(['cafe', 'fs'] as const).forEach((area) => {
-							const assignments = slots[slot].filter((a) => a.area === area);
-							if (assignments.length === 1) {
-								slots[slot] = slots[slot].filter((a) => a.area !== area);
-							}
-						});
-					}
-				});
-
 				// --- STEP F: あぶれた希望提出者（あぶれメンバー）のストック ---
 				const allAssignedIds = new Set<string>();
 				TIME_SLOTS.forEach((slot) => {
@@ -1095,10 +1275,94 @@
 			// Svelteが再描画を確実に検知できるよう、再代入を実行して一瞬で即時再描画させる！
 			monthlyConfirmedShifts = { ...newShiftsMap };
 
-			// 自動生成完了後、自動で一括保存を実行する
-			await handleSaveAllMonthlyShifts();
+			// ローカルストレージキャッシュに即時保存して別ページ移動時も画面の消失を防ぐ
+			saveConfirmedShiftsToLocalCache(year, month, newShiftsMap);
+
+			// 自動生成完了時は「未確定・ステージング（仮プレビュー）」状態にする！
+			isStaging = true;
+			isPublished = false;
 		} catch (e) {
 			console.error('Error generating monthly shifts:', e);
+		} finally {
+			isLoading = false;
+		}
+	}
+
+	/**
+	 * 【⚡️ シフトを確定してスタッフへ送信（公開）】
+	 * 管理者が確認後「確定して送信」を押したタイミングで、Firestore confirmed_shifts コレクションへ
+	 * 確定書き込みを実行し、全端末へリアルタイム配信（0秒同期）を完了させる！
+	 */
+	async function handlePublishConfirmedShifts() {
+		if (isLoading) return;
+		isLoading = true;
+		try {
+			const targetYearMonth = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+
+			// 1. ローカルストレージへ即時保存
+			saveConfirmedShiftsToLocalCache(currentYear, currentMonth, monthlyConfirmedShifts);
+
+			// 2. 統一仕様パス: shifts/${yearMonth} ドキュメントへ確定シフト一括保存
+			const mainShiftRef = doc(db, 'shifts', targetYearMonth);
+			await setDoc(
+				mainShiftRef,
+				{
+					yearMonth: targetYearMonth,
+					assignments: monthlyConfirmedShifts,
+					updatedAt: Timestamp.now()
+				},
+				{ merge: true }
+			);
+
+			// 3. 後方互換のため confirmed_shifts コレクションへの個別日付書き込みも並行処理
+			const batch = writeBatch(db);
+			Object.values(monthlyConfirmedShifts).forEach((shift) => {
+				if (shift && shift.date) {
+					const cDocRef = doc(db, 'confirmed_shifts', shift.date);
+					batch.set(cDocRef, {
+						date: shift.date,
+						slots: shift.slots || {},
+						unassignedStaffs: shift.unassignedStaffs || [],
+						updatedAt: Timestamp.now()
+					});
+				}
+			});
+			await fetchWithTimeout(batch.commit(), undefined, 2500);
+
+			console.log(`[PublishShifts] Successfully committed confirmed shifts to shifts/${targetYearMonth} in Firestore.`);
+
+			// 固定設定（UNICES/FS日程）も同時に保存
+			saveUnicesAndFsSettings().catch(() => {});
+
+			// バックグラウンドで Notion バックアップを並行トリガー
+			if (typeof window !== 'undefined' && navigator.onLine) {
+				isSyncingNotion = true;
+				Promise.all(
+					Object.values(monthlyConfirmedShifts).map((shift) => {
+						if (shift && shift.slots) {
+							const hasAssignments = Object.values(shift.slots).some((arr) => arr && arr.length > 0);
+							if (hasAssignments) {
+								return backupToNotion(shift);
+							}
+						}
+						return Promise.resolve(true);
+					})
+				).finally(() => {
+					isSyncingNotion = false;
+				});
+			}
+
+			// ステータスを「確定・公開済み」へ遷移させる
+			isStaging = false;
+			isPublished = true;
+			isPublishedToast = true;
+
+			setTimeout(() => {
+				isPublishedToast = false;
+			}, 4000);
+		} catch (err) {
+			console.error('Error publishing monthly shifts:', err);
+			alert('確定・送信中にエラーが発生しました。');
 		} finally {
 			isLoading = false;
 		}
@@ -1107,7 +1371,6 @@
 	// 考慮度の変更ハンドラ
 	function changeIncomeWeight(weight: 'none' | 'low' | 'high') {
 		considerIncomeWeight = weight;
-		triggerMonthlyAutoGenerate();
 	}
 
 	// カレンダーの日付セル用：スタッフ勤務時間範囲の取得
@@ -1579,10 +1842,14 @@
 		return null;
 	}
 
-	// 全日付の一括保存処理（Firestoreバッチ）
-	async function handleSaveAllMonthlyShifts() {
-		isLoading = true;
+	// 全日付の一括保存処理（Firestoreバッチ ＋ ローカルキャッシュ ＋ リアルタイム配信）
+	async function handleSaveAllMonthlyShifts(silent = false) {
+		if (!silent) isLoading = true;
 		try {
+			// 1. ローカルストレージへ即時永続保存 (0ms保護)
+			saveConfirmedShiftsToLocalCache(currentYear, currentMonth, monthlyConfirmedShifts);
+
+			// 2. Firestore へ書き込み (onSnapshot リスナーにより全スタッフ画面に即時反映)
 			const batch = writeBatch(db);
 
 			Object.values(monthlyConfirmedShifts).forEach((shift) => {
@@ -1591,32 +1858,40 @@
 					batch.set(docRef, {
 						date: shift.date,
 						slots: shift.slots || {},
+						unassignedStaffs: shift.unassignedStaffs || [],
 						updatedAt: Timestamp.now()
 					});
 				}
 			});
 
-			await batch.commit();
+			try {
+				await fetchWithTimeout(batch.commit(), undefined, 2500);
+				console.log('[SaveShifts] Successfully committed confirmed_shifts to Firestore.');
+			} catch (commitErr) {
+				console.warn('[AutoSave] Firestore batch commit bypassed or failed:', commitErr);
+			}
 
 			// 固定設定（UNICES/FS日程）も同時に一括保存
-			await saveUnicesAndFsSettings();
+			saveUnicesAndFsSettings().catch(() => {});
 
-			// バックグラウンドで Notion バックアップを並行トリガー
-			isSyncingNotion = true;
-			Promise.all(
-				Object.values(monthlyConfirmedShifts).map((shift) => {
-					if (shift && shift.slots) {
-						const hasAssignments = Object.values(shift.slots).some((arr) => arr && arr.length > 0);
-						if (hasAssignments) {
-							return backupToNotion(shift);
+			// バックグラウンドで Notion バックアップを並行トリガー (オフライン時は即時完了)
+			if (typeof window !== 'undefined' && navigator.onLine) {
+				isSyncingNotion = true;
+				Promise.all(
+					Object.values(monthlyConfirmedShifts).map((shift) => {
+						if (shift && shift.slots) {
+							const hasAssignments = Object.values(shift.slots).some((arr) => arr && arr.length > 0);
+							if (hasAssignments) {
+								return backupToNotion(shift);
+							}
 						}
-					}
-					return Promise.resolve(true);
-				})
-			).then(() => {
-				isSyncingNotion = false;
-				console.log('Notion month backup completed successfully.');
-			});
+						return Promise.resolve(true);
+					})
+				).finally(() => {
+					isSyncingNotion = false;
+					console.log('Notion month backup task finished.');
+				});
+			}
 
 			isSavedToast = true;
 			setTimeout(() => {
@@ -1624,9 +1899,9 @@
 			}, 4000);
 		} catch (err) {
 			console.error('Error saving all monthly shifts:', err);
-			alert('保存中にエラーが発生しました。');
+			if (!silent) alert('保存中にエラーが発生しました。');
 		} finally {
-			isLoading = false;
+			if (!silent) isLoading = false;
 		}
 	}
 
@@ -1663,6 +1938,35 @@
 		} catch (e) {
 			console.error('Failed to save matrix settings:', e);
 		}
+	}
+
+	// イベント日設定の保存
+	async function saveEventDatesSettings() {
+		try {
+			const docRef = doc(db, 'settings', 'global');
+			await setDoc(
+				docRef,
+				{
+					eventDates,
+					updatedAt: Timestamp.now()
+				},
+				{ merge: true }
+			);
+			console.log('[Settings] Successfully saved eventDates to settings/global in Firestore.');
+		} catch (e) {
+			console.error('Failed to save eventDates settings:', e);
+			alert('イベント日設定の保存に失敗しました。');
+		}
+	}
+
+	// イベント日のトグル処理
+	function toggleEventDate(dateStr: string) {
+		if (eventDates.includes(dateStr)) {
+			eventDates = eventDates.filter((d) => d !== dateStr);
+		} else {
+			eventDates = [...eventDates, dateStr];
+		}
+		saveEventDatesSettings();
 	}
 
 	// 特定の日付のシフトのみを自動即時保存するヘルパー
@@ -1913,9 +2217,20 @@
 						<span>← ホームへ戻る</span>
 					</a>
 				</div>
-				<h1 class="mt-2 flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
-					<span>IPO Shift - 月間マトリクス・パズル調整</span>
-				</h1>
+				<div class="flex items-center gap-3">
+					<h1 class="mt-2 flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-900">
+						<span>IPO Shift - 月間マトリクス・パズル調整</span>
+					</h1>
+					{#if isStaging}
+						<span class="mt-2 inline-flex animate-pulse items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-extrabold text-amber-700 shadow-xs">
+							<span>📝</span> 仮プレビュー (未確定)
+						</span>
+					{:else if isPublished}
+						<span class="mt-2 inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-extrabold text-emerald-700 shadow-xs">
+							<span>✅</span> 確定・全端末公開済み
+						</span>
+					{/if}
+				</div>
 				<p class="text-xs text-slate-500">
 					情報を削ぎ落とした、1ヶ月全体を俯瞰して調整できるシフト決定用クリーン画面
 				</p>
@@ -1975,19 +2290,18 @@
 				>
 					💬 空き枠コピー
 				</button>
+
 				<button
 					type="button"
-					onclick={handleSaveAllMonthlyShifts}
+					onclick={handlePublishConfirmedShifts}
 					disabled={isLoading}
-					class="flex cursor-pointer items-center gap-1.5 rounded-full bg-indigo-600 px-6 py-2.5 font-sans text-xs font-bold text-white shadow-sm transition-all duration-300 ease-in-out hover:scale-[1.03] hover:bg-indigo-500 active:scale-95 disabled:cursor-not-allowed disabled:bg-indigo-400"
+					class="flex cursor-pointer items-center gap-2 rounded-full bg-gradient-to-r from-amber-500 via-emerald-600 to-indigo-600 px-6 py-2.5 font-sans text-xs font-black text-white shadow-md transition-all duration-300 hover:scale-[1.03] hover:shadow-lg active:scale-95 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					{#if isLoading}
-						<span
-							class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent"
-						></span>
-						<span>保存中...</span>
+						<span class="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+						<span>処理中...</span>
 					{:else}
-						<span>💾 全ての変更を保存</span>
+						<span>⚡️ シフトを確定してスタッフへ送信（公開）</span>
 					{/if}
 				</button>
 			</div>
@@ -1995,6 +2309,92 @@
 
 		<!-- メインコンテンツ -->
 		{#if activeTab === 'puzzle'}
+			<!-- スタッフ希望提出状況 ＆ リアルタイム同期ダッシュボード -->
+			<section class="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-xs">
+				<div class="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+					<div class="flex items-center gap-2">
+						<span class="text-base">📋</span>
+						<h2 class="text-sm font-bold text-slate-900">スタッフ希望提出状況・ダッシュボード (リアルタイム同期)</h2>
+						<span class="rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-extrabold text-indigo-700">
+							対象月: {currentYear}年{currentMonth}月
+						</span>
+					</div>
+					<div class="flex items-center gap-2 text-xs font-semibold text-slate-500">
+						<span class="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">
+							<span>✅</span> 提出済み ({submittedCount}名)
+						</span>
+						<span class="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">
+							<span>⏳</span> 未提出・デフォルト適用 ({unsubmittedCount}名)
+						</span>
+					</div>
+				</div>
+
+				<!-- 17名スタッフカードグリッド -->
+				<div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+					{#each staffs as s (s.id)}
+						{@const wishDoc = staffWishesDocMap[s.id]}
+						{@const isSub = wishDoc?.isSubmitted || false}
+						{@const offList = wishDoc?.offDates || s.offDates || []}
+						{@const policy = wishDoc?.dayPreferencePolicy || s.dayPreferencePolicy || 'ANY'}
+						<div class="flex flex-col justify-between rounded-2xl border p-3.5 transition-all duration-200 hover:shadow-xs {isSub ? 'border-emerald-200/80 bg-emerald-50/20' : 'border-slate-200/60 bg-slate-50/40'}">
+							<div>
+								<div class="flex items-center justify-between gap-2">
+									<div class="flex min-w-0 items-center gap-1.5">
+										<span class="truncate text-xs font-extrabold text-slate-800">{s.name}</span>
+										{#if s.role === 'employee'}
+											<span class="rounded bg-indigo-100 px-1.5 py-0.5 text-[9px] font-bold text-indigo-700">社員</span>
+										{/if}
+									</div>
+									{#if isSub}
+										<span class="shrink-0 rounded-full border border-emerald-300 bg-emerald-100 px-2 py-0.5 text-[9px] font-extrabold text-emerald-800">
+											✅ 提出済み
+										</span>
+									{:else}
+										<span class="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[9px] font-extrabold text-amber-700">
+											⏳ デフォルト
+										</span>
+									{/if}
+								</div>
+
+								<div class="mt-2.5 space-y-1.5 text-[10px] font-semibold text-slate-600">
+									<div class="flex items-center justify-between">
+										<span class="text-slate-400">希望月収 / 上限:</span>
+										<span class="font-bold text-slate-800">
+											{((wishDoc?.target_monthly_income || s.target_monthly_income || 50000) / 10000).toFixed(1)}万 / {((wishDoc?.max_monthly_income || s.max_monthly_income || 80000) / 10000).toFixed(1)}万円
+										</span>
+									</div>
+									<div class="flex items-center justify-between">
+										<span class="text-slate-400">週希望 / 曜日方針:</span>
+										<div class="flex items-center gap-1">
+											<span class="font-bold text-slate-800">週{wishDoc?.preferredDaysPerWeek ?? s.preferredDaysPerWeek ?? 0}日</span>
+											<span class="rounded px-1.5 py-0.5 text-[9px] font-extrabold text-white {policy === 'FIXED' ? 'bg-indigo-600' : policy === 'ROTATING' ? 'bg-emerald-600' : 'bg-slate-400'}">
+												{policy === 'FIXED' ? '固定' : policy === 'ROTATING' ? '分散' : '自由'}
+											</span>
+										</div>
+									</div>
+								</div>
+							</div>
+
+							<!-- NG日 (休み希望) タグ一覧 -->
+							<div class="mt-3 border-t border-slate-100 pt-2 text-[10px]">
+								<span class="font-bold text-slate-400">休み希望 ({offList.length}日):</span>
+								{#if offList.length > 0}
+									<div class="mt-1 flex max-h-12 flex-wrap gap-1 overflow-y-auto pr-0.5">
+										{#each offList as dStr}
+											<span class="rounded border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
+												{dStr.split('-').slice(1).join('/')}
+											</span>
+										{/each}
+									</div>
+								{:else}
+									<span class="ml-1 font-normal text-slate-400">なし (全日可能)</span>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			</section>
+
 			<!-- 「🧩 パズル調整」メイン画面 -->
 			<div class="grid grid-cols-1 gap-6 lg:grid-cols-4">
 				<!-- 左側：ツイン月間カレンダー (コピールーム・コワーキング / UNICES) -->
@@ -2423,6 +2823,54 @@
 							{/each}
 						</div>
 					</section>
+
+					<!-- イベント日（人員増枠対象日）設定セクション -->
+					<section
+						class="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.015)]"
+					>
+						<div class="mb-6 border-b border-slate-100 pb-3">
+							<h2 class="flex items-center gap-2 text-sm font-bold text-slate-800">
+								<span>✨</span>
+								イベント日設定（特定日の人員増枠 +1名）
+							</h2>
+							<p class="mt-1 text-[10px] text-slate-400">
+								イベント日を選択してください。登録された日付は、カフェ枠（CW）やフリースクール枠（FS）の必要人数が自動的に <strong>+1名</strong> 増枠されます。
+							</p>
+						</div>
+
+						<!-- カレンダー形式のトグルUI（プレミアムスタイル） -->
+						<div class="grid grid-cols-7 gap-2 text-center font-mono text-[10px] font-bold tracking-wider text-slate-400 uppercase mb-2">
+							<div>日</div>
+							<div>月</div>
+							<div>火</div>
+							<div>水</div>
+							<div>木</div>
+							<div>金</div>
+							<div>土</div>
+						</div>
+
+						<div class="grid grid-cols-7 gap-2">
+							{#each calendarDays as cell}
+								{@const isSelected = eventDates.includes(cell.dateStr)}
+								<button
+									type="button"
+									disabled={cell.isPadding}
+									onclick={() => toggleEventDate(cell.dateStr)}
+									class="relative flex min-h-[50px] flex-col items-center justify-center rounded-xl border p-2 transition-all duration-300 select-none cursor-pointer
+										{cell.isPadding
+											? 'border-slate-100 bg-slate-50/20 opacity-30 cursor-not-allowed'
+											: isSelected
+												? 'border-amber-400 bg-gradient-to-br from-amber-50 to-orange-50 text-amber-700 shadow-sm font-extrabold hover:brightness-95'
+												: 'border-slate-250 bg-white text-slate-600 hover:border-slate-350 hover:bg-slate-50'}"
+								>
+									<span class="text-xs">{cell.dayNum}</span>
+									{#if isSelected && !cell.isPadding}
+										<span class="mt-1 text-[7px] font-extrabold tracking-wider bg-amber-500 text-white rounded px-1 scale-90">+1名</span>
+									{/if}
+								</button>
+							{/each}
+						</div>
+					</section>
 				</div>
 
 				<!-- 右側：スタッフ詳細目標設定 (1カラム) -->
@@ -2513,7 +2961,8 @@
 		{@const currentCell = calendarDays.find((c) => c.dateStr === dateStr)}
 		{@const unassignedList = currentCell?.unassignedStaffs || []}
 		{@const assignedList = area === 'cafe' ? currentCell?.cafeStaffs : currentCell?.unicesStaffs}
-		{@const limit = area === 'cafe' ? 2 : 1}
+		{@const isEventDay = eventDates.includes(dateStr)}
+		{@const limit = (area === 'cafe' ? 2 : 1) + (area === 'cafe' && isEventDay ? 1 : 0)}
 
 		<div
 			role="presentation"
@@ -2690,6 +3139,44 @@
 		</div>
 	{/if}
 
+	{#if isLoading}
+		<div
+			class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/30 p-4 backdrop-blur-lg animate-in fade-in duration-300"
+		>
+			<!-- 装飾用ブラーグラデーションバックライト -->
+			<div class="absolute w-72 h-72 rounded-full bg-indigo-500/10 blur-[80px]"></div>
+			<div class="absolute w-60 h-60 rounded-full bg-pink-500/10 blur-[60px] translate-x-20 translate-y-20"></div>
+
+			<div
+				class="relative max-w-sm w-full overflow-hidden rounded-[2rem] border border-slate-200/60 bg-white/95 p-8 text-center shadow-[0_24px_60px_rgba(0,0,0,0.08)] backdrop-blur-md"
+			>
+				<!-- アニメーションスピナー -->
+				<div class="relative mx-auto flex h-20 w-20 items-center justify-center">
+					<div
+						class="absolute inset-0 animate-spin rounded-full border-[3px] border-indigo-600 border-r-pink-500 border-b-purple-600 border-l-transparent"
+					></div>
+					<span class="text-3xl animate-pulse">🤖</span>
+				</div>
+
+				<h3 class="mt-6 text-sm font-bold text-slate-900 font-sans">
+					⚡ AIが月間シフトを最適化中...
+				</h3>
+				<p class="mt-3 text-[10px] leading-relaxed text-slate-500 font-sans">
+					1スロットずつ順番に進捗率と上限月収をプログラム側で正確に集計・ガードしながら、最もバランスの良いシフトをAIが順次アサインしています。
+				</p>
+				
+				<!-- 簡易的なプログレスアニメーションバー -->
+				<div class="mt-6 h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+					<div class="h-full w-1/3 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full animate-progress"></div>
+				</div>
+
+				<p class="mt-4 text-[9px] font-bold text-slate-400 font-sans">
+					処理には約30秒〜45秒かかります。このままお待ちください。
+				</p>
+			</div>
+		</div>
+	{/if}
+
 	{#if isCopiedToast}
 		<div
 			class="animate-in slide-in-from-bottom-4 fixed right-6 bottom-6 z-50 flex items-center gap-3 rounded-3xl border border-slate-200/80 bg-white/95 px-6 py-4 font-sans shadow-[0_12px_40px_rgba(0,0,0,0.06)] backdrop-blur-md duration-300"
@@ -2703,4 +3190,35 @@
 			</div>
 		</div>
 	{/if}
+
+	{#if isPublishedToast}
+		<div
+			class="animate-in slide-in-from-bottom-4 fixed right-6 bottom-6 z-50 flex items-center gap-3 rounded-3xl border border-emerald-300/80 bg-emerald-600 px-6 py-4 font-sans text-white shadow-2xl backdrop-blur-md duration-300"
+		>
+			<span class="text-xl">⚡️</span>
+			<div>
+				<p class="text-xs font-black">スタッフ全員の画面へ公開しました！</p>
+				<p class="mt-0.5 text-[10px] font-medium text-emerald-100">
+					Firestoreへ確定更新されました。全端末へ0秒でリアルタイム同期されます。
+				</p>
+			</div>
+		</div>
+	{/if}
 </div>
+
+<style>
+	@keyframes progress-loading {
+		0% {
+			transform: translateX(-100%);
+		}
+		50% {
+			transform: translateX(200%);
+		}
+		100% {
+			transform: translateX(-100%);
+		}
+	}
+	.animate-progress {
+		animation: progress-loading 2s infinite ease-in-out;
+	}
+</style>

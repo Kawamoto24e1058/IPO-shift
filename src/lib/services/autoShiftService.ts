@@ -1,5 +1,7 @@
 import { type Wish } from './shiftService';
 
+export type DayPreferencePolicy = 'ANY' | 'FIXED' | 'ROTATING';
+
 export interface Staff {
 	id: string;
 	name: string;
@@ -19,6 +21,9 @@ export interface Staff {
 	is_trainee?: boolean;
 	isTrainee?: boolean;
 	isLateSubmission?: boolean;
+	preferredDaysPerWeek?: number; // 希望日数 (0: 指定なし, 1: 週1日, 2: 週2日, 3: 週3日, 4: 週4日)
+	dayPreferencePolicy?: DayPreferencePolicy; // 'ANY' | 'FIXED' | 'ROTATING'
+	offDates?: string[]; // 休み希望日リスト
 }
 
 export interface UnicesEvent {

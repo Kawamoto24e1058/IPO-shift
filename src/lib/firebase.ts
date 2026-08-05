@@ -1,15 +1,25 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from 'firebase/firestore';
-import { env } from '$env/dynamic/public';
+import {
+	PUBLIC_FIREBASE_API_KEY,
+	PUBLIC_FIREBASE_AUTH_DOMAIN,
+	PUBLIC_FIREBASE_PROJECT_ID,
+	PUBLIC_FIREBASE_STORAGE_BUCKET,
+	PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+	PUBLIC_FIREBASE_APP_ID,
+	PUBLIC_OWNER_UID
+} from '$env/static/public';
+
+console.log('[Firebase Init] API Key loaded from static public env:', PUBLIC_FIREBASE_API_KEY ? 'FOUND' : 'NOT FOUND');
 
 const firebaseConfig = {
-	apiKey: env.PUBLIC_FIREBASE_API_KEY,
-	authDomain: env.PUBLIC_FIREBASE_AUTH_DOMAIN,
-	projectId: env.PUBLIC_FIREBASE_PROJECT_ID,
-	storageBucket: env.PUBLIC_FIREBASE_STORAGE_BUCKET,
-	messagingSenderId: env.PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-	appId: env.PUBLIC_FIREBASE_APP_ID
+	apiKey: PUBLIC_FIREBASE_API_KEY || 'AIzaSyDBlV6UmaJJeu-PNuYWJfkrMmVywczMK1g',
+	authDomain: PUBLIC_FIREBASE_AUTH_DOMAIN || 'ipo-shift.firebaseapp.com',
+	projectId: PUBLIC_FIREBASE_PROJECT_ID || 'ipo-shift',
+	storageBucket: PUBLIC_FIREBASE_STORAGE_BUCKET || 'ipo-shift.firebasestorage.app',
+	messagingSenderId: PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '417029960667',
+	appId: PUBLIC_FIREBASE_APP_ID || '1:417029960667:web:32d8cad8352f636a94adfe'
 };
 
 // Initialize Firebase
@@ -28,7 +38,7 @@ export async function checkIsAdmin(uid: string | undefined | null): Promise<bool
 	if (!uid) return false;
 
 	// 1. 特権ID (OWNER_UID) と一致するかチェック
-	if (env.PUBLIC_OWNER_UID && uid === env.PUBLIC_OWNER_UID) {
+	if (PUBLIC_OWNER_UID && uid === PUBLIC_OWNER_UID) {
 		return true;
 	}
 

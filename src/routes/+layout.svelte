@@ -1,5 +1,7 @@
 <!-- src/routes/+layout.svelte -->
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { page } from '$app/stores';
@@ -8,16 +10,27 @@
 
 	let { children } = $props();
 
+	onMount(() => {
+		if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+			// 既存の Service Worker を最新の安全な sw.js に更新
+			navigator.serviceWorker.getRegistrations().then((registrations) => {
+				for (const registration of registrations) {
+					registration.update().catch(() => {});
+				}
+			});
+		}
+	});
+
 	// ルーティングガードの自動判定
 	$effect(() => {
 		if (!authState.loading) {
 			const currentPath = $page.url.pathname;
 			if (!authState.user && currentPath !== '/login') {
 				// 未ログイン時のリダイレクト
-				window.location.href = '/login';
+				goto('/login');
 			} else if (authState.user && currentPath === '/login') {
 				// ログイン済みなのにログインページへ行った場合のダッシュボードリダイレクト
-				window.location.href = '/';
+				goto('/');
 			}
 		}
 	});
