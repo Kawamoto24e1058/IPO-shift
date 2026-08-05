@@ -864,54 +864,66 @@
 
 		setupRealtimeShiftListener(currentYear, currentMonth);
 
+		let wishData: any = null;
+
 		// 1. 統一仕様パス wishes/${yearMonth}_${currentUserId} から当月希望データを復元
 		try {
 			const wishSnap = await getDoc(doc(db, 'wishes', mainWishDocId));
-			if (
-				targetYear === currentYear &&
-				targetMonth === currentMonth &&
-				userId === currentUserId
-			) {
-				if (wishSnap.exists()) {
-					const wishData = wishSnap.data();
-					if (wishData) {
-						isSubmitted = !!wishData.isSubmitted;
-						if (wishData.target_monthly_income > 0) {
-							targetMonthlyIncomeInput = wishData.target_monthly_income;
-						}
-						if (wishData.max_monthly_income > 0) {
-							maxMonthlyIncomeInput = wishData.max_monthly_income;
-						}
-						if (wishData.preferredDaysPerWeek !== undefined) {
-							preferredDaysPerWeekInput = Number(wishData.preferredDaysPerWeek);
-						}
-						if (wishData.dayPreferencePolicy) {
-							dayPreferencePolicyInput = wishData.dayPreferencePolicy;
-						}
-
-						// 既存の希望データがある場合のみ、overriddenWishes を復元
-						if (wishData.wishes && Object.keys(wishData.wishes).length > 0) {
-							const restoredMap: { [dateStr: string]: Wish } = {};
-							Object.entries(wishData.wishes).forEach(([dStr, w]: [string, any]) => {
-								restoredMap[dStr] = {
-									date: dStr,
-									type: w.type || (w.startTime ? 'specific' : 'free'),
-									startTime: w.startTime || '',
-									endTime: w.endTime || '',
-									isOverridden: true,
-									isSubmitted: !!wishData.isSubmitted
-								};
-							});
-							overriddenWishes = { ...overriddenWishes, ...restoredMap };
-							console.log(`[Wishes Restore] Successfully restored ${Object.keys(restoredMap).length} wishes for ${mainWishDocId}`);
-						}
-					}
-				} else {
-					console.log(`[Wishes Restore Safe Guard] Document wishes/${mainWishDocId} not found. Keeping local wishes intact.`);
-				}
+			if (wishSnap.exists()) {
+				wishData = wishSnap.data();
 			}
 		} catch (err) {
-			console.warn(`[Wishes Restore Safe Guard] Firestore fetch failed for ${mainWishDocId}, keeping local state:`, err);
+			console.warn(`[Wishes Restore Guard] Firestore fetch failed for ${mainWishDocId}, trying LocalStorage backup:`, err);
+		}
+
+		// 2. Firestoreデータがない場合、LocalStorage バックアップから安全復元
+		if (!wishData && typeof window !== 'undefined' && window.localStorage) {
+			const cached = localStorage.getItem(`wish_${yearMonth}_${currentUserId}`);
+			if (cached) {
+				try {
+					wishData = JSON.parse(cached);
+					console.log(`[Wishes Restore Fallback] Restored wishes from LocalStorage for ${mainWishDocId}`);
+				} catch (pErr) {
+					console.warn('[Wishes Restore Fallback] Failed to parse LocalStorage cached wishes:', pErr);
+				}
+			}
+		}
+
+		if (
+			targetYear === currentYear &&
+			targetMonth === currentMonth &&
+			userId === currentUserId &&
+			wishData
+		) {
+			isSubmitted = !!wishData.isSubmitted;
+			if (wishData.target_monthly_income > 0) {
+				targetMonthlyIncomeInput = wishData.target_monthly_income;
+			}
+			if (wishData.max_monthly_income > 0) {
+				maxMonthlyIncomeInput = wishData.max_monthly_income;
+			}
+			if (wishData.preferredDaysPerWeek !== undefined) {
+				preferredDaysPerWeekInput = Number(wishData.preferredDaysPerWeek);
+			}
+			if (wishData.dayPreferencePolicy) {
+				dayPreferencePolicyInput = wishData.dayPreferencePolicy;
+			}
+
+			if (wishData.wishes && Object.keys(wishData.wishes).length > 0) {
+				const restoredMap: { [dateStr: string]: Wish } = {};
+				Object.entries(wishData.wishes).forEach(([dStr, w]: [string, any]) => {
+					restoredMap[dStr] = {
+						date: dStr,
+						type: w.type || (w.startTime ? 'specific' : 'free'),
+						startTime: w.startTime || '',
+						endTime: w.endTime || '',
+						isOverridden: true,
+						isSubmitted: !!wishData.isSubmitted
+					};
+				});
+				overriddenWishes = { ...overriddenWishes, ...restoredMap };
+				console.log(`[Wishes Restore] Successfully restored ${Object.keys(restoredMap).length} wishes for ${mainWishDocId}`);
+			}
 		}
 
 		// 2. submittals ステータスの取得

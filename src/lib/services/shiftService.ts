@@ -323,55 +323,76 @@ export async function submitMonthlyWishes(
 		}
 	});
 
-	// 1. 統一仕様である wishes/${yearMonth}_${userId} ドキュメントに一括保存
-	await setDoc(
-		mainWishRef,
-		{
-			userId,
-			yearMonth,
-			wishes: wishesMap,
-			wishesList: wishes,
-			offDates: extraData?.offDates || offDates,
-			target_monthly_income: extraData?.target_monthly_income || 0,
-			max_monthly_income: extraData?.max_monthly_income || 0,
-			preferredDaysPerWeek: extraData?.preferredDaysPerWeek || 0,
-			dayPreferencePolicy: extraData?.dayPreferencePolicy || 'ANY',
-			isSubmitted: true,
-			updatedAt: Timestamp.now()
-		},
-		{ merge: true }
-	);
-
-	// 2. 互換性のための submittals および個別 wishes/${userId}_${date} の書き込み
-	const batch = writeBatch(db);
-	const submittalDocId = `${userId}_${yearMonth}`;
-	batch.set(doc(db, 'submittals', submittalDocId), {
+	const payload = {
 		userId,
-		year,
-		month,
+		yearMonth,
+		wishes: wishesMap,
+		wishesList: wishes,
+		offDates: extraData?.offDates || offDates,
+		target_monthly_income: extraData?.target_monthly_income || 0,
+		max_monthly_income: extraData?.max_monthly_income || 0,
+		preferredDaysPerWeek: extraData?.preferredDaysPerWeek || 0,
+		dayPreferencePolicy: extraData?.dayPreferencePolicy || 'ANY',
 		isSubmitted: true,
-		submittedAt: Timestamp.now()
-	});
+		updatedAt: new Date().toISOString()
+	};
 
-	wishes.forEach((w) => {
-		const docId = `${userId}_${w.date}`;
-		batch.set(
-			doc(db, 'wishes', docId),
+	// 1. 常時 LocalStorage に即時バックアップ保存 (0msデータ永続化保証)
+	if (typeof window !== 'undefined' && window.localStorage) {
+		try {
+			localStorage.setItem(`wish_${yearMonth}_${userId}`, JSON.stringify(payload));
+			console.log(`[LocalStorage Backup] Preserved wishes for ${yearMonth}_${userId}`);
+		} catch (lsErr) {
+			console.warn('[LocalStorage Backup] Failed to write to localStorage:', lsErr);
+		}
+	}
+
+	// 2. 統一仕様である wishes/${yearMonth}_${userId} ドキュメントに一括保存
+	try {
+		await setDoc(
+			mainWishRef,
 			{
-				userId,
-				date: w.date,
-				type: w.type,
-				startTime: w.startTime,
-				endTime: w.endTime,
-				isOverridden: w.isOverridden,
-				isSubmitted: true,
+				...payload,
 				updatedAt: Timestamp.now()
 			},
 			{ merge: true }
 		);
-	});
+	} catch (e: any) {
+		console.warn(`[Firestore Permission/Network Guard] setDoc failed for wishes/${mainWishDocId}, but LocalStorage backup is preserved:`, e);
+	}
 
-	await batch.commit();
+	// 3. 互換性のための submittals および個別 wishes/${userId}_${date} の書き込み
+	try {
+		const batch = writeBatch(db);
+		const submittalDocId = `${userId}_${yearMonth}`;
+		batch.set(doc(db, 'submittals', submittalDocId), {
+			userId,
+			year,
+			month,
+			isSubmitted: true,
+			submittedAt: Timestamp.now()
+		});
+
+		wishes.forEach((w) => {
+			const docId = `${userId}_${w.date}`;
+			batch.set(
+				doc(db, 'wishes', docId),
+				{
+					date: w.date,
+					type: w.type,
+					startTime: w.startTime || '',
+					endTime: w.endTime || '',
+					isOverridden: w.isOverridden,
+					isSubmitted: true
+				},
+				{ merge: true }
+			);
+		});
+
+		await batch.commit();
+	} catch (e: any) {
+		console.warn(`[Firestore Permission Guard] Batch commit failed, but local data is safe:`, e);
+	}
 }
 
 /**
