@@ -300,6 +300,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		});
 
 		const getSlotPriority = (slot: any) => {
+			// 09:45 開始 または 20:15 終了の開閉店必須枠を最優先 (優先度0)
+			const isOpeningOrClosing = slot.startTime === '09:45' || slot.endTime === '20:15';
+			if (isOpeningOrClosing) return 0;
+
 			if (slot.type === 'FS') return 1;
 			if (slot.type === 'CW') {
 				return isWeekend(slot.date) ? 2 : 3;
@@ -546,50 +550,89 @@ export const POST: RequestHandler = async ({ request }) => {
 
 			// A1. 開店カバー判定 (09:45の開始が0名の場合)
 			if (intervalCount[OPEN_MIN] === 0 && dayAssignments.length > 0) {
-				const earliestAssign = dayAssignments.reduce((prev, curr) => {
-					const [pH, pM] = prev.startTime.split(':').map(Number);
-					const [cH, cM] = curr.startTime.split(':').map(Number);
-					return cH * 60 + cM < pH * 60 + pM ? curr : prev;
+				const validCandidates = dayAssignments.filter((a) => {
+					const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
+					if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
+					const [sH, sM] = a.startTime.split(':').map(Number);
+					const oldStartM = sH * 60 + sM;
+					const extraHours = (oldStartM - OPEN_MIN) / 60;
+					const extraWage = extraHours * staff.hourly_wage;
+					return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
 				});
 
-				if (earliestAssign) {
+				if (validCandidates.length > 0) {
+					const earliestAssign = validCandidates.reduce((prev, curr) => {
+						const [pH, pM] = prev.startTime.split(':').map(Number);
+						const [cH, cM] = curr.startTime.split(':').map(Number);
+						return cH * 60 + cM < pH * 60 + pM ? curr : prev;
+					});
+
 					const staff = minifiedStaffs.find((s: any) => s.id === earliestAssign.assignedStaffId);
-					if (staff && !isStaffOff(staff, normalizedTargetDate)) {
+					if (staff) {
+						const [sH, sM] = earliestAssign.startTime.split(':').map(Number);
+						const oldStartM = sH * 60 + sM;
+						const extraHours = (oldStartM - OPEN_MIN) / 60;
+						const extraWage = extraHours * staff.hourly_wage;
+
 						earliestAssign.startTime = '09:45';
-						console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr}`);
+						earnedWages[staff.id] += extraWage;
+						console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
 					}
 				}
 			}
 
 			// A2. 閉店カバー判定 (20:15の終了が0名の場合)
 			if (intervalCount[CLOSE_MIN - 15] === 0 && dayAssignments.length > 0) {
-				const latestAssign = dayAssignments.reduce((prev, curr) => {
-					const [pH, pM] = prev.endTime.split(':').map(Number);
-					const [cH, cM] = curr.endTime.split(':').map(Number);
-					return cH * 60 + cM > pH * 60 + pM ? curr : prev;
+				const validCandidates = dayAssignments.filter((a) => {
+					const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
+					if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
+					const [eH, eM] = a.endTime.split(':').map(Number);
+					const oldEndM = eH * 60 + eM;
+					const extraHours = (CLOSE_MIN - oldEndM) / 60;
+					const extraWage = extraHours * staff.hourly_wage;
+					return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
 				});
 
-				if (latestAssign) {
+				if (validCandidates.length > 0) {
+					const latestAssign = validCandidates.reduce((prev, curr) => {
+						const [pH, pM] = prev.endTime.split(':').map(Number);
+						const [cH, cM] = curr.endTime.split(':').map(Number);
+						return cH * 60 + cM > pH * 60 + pM ? curr : prev;
+					});
+
 					const staff = minifiedStaffs.find((s: any) => s.id === latestAssign.assignedStaffId);
-					if (staff && !isStaffOff(staff, normalizedTargetDate)) {
+					if (staff) {
+						const [eH, eM] = latestAssign.endTime.split(':').map(Number);
+						const oldEndM = eH * 60 + eM;
+						const extraHours = (CLOSE_MIN - oldEndM) / 60;
+						const extraWage = extraHours * staff.hourly_wage;
+
 						latestAssign.endTime = '20:15';
-						console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr}`);
+						earnedWages[staff.id] += extraWage;
+						console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
 					}
 				}
 			}
 
-			// B. 無人時間帯（0名時間）の自動埋め拡張
+			// B. 無人時間帯（0名時間）の自動埋め拡張 (上限超えガード付き)
 			for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
 				if (intervalCount[m] === 0 && dayAssignments.length > 0) {
 					const adjAssign = dayAssignments.find((a) => {
+						const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
+						if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
 						const [sH, sM] = a.startTime.split(':').map(Number);
 						const [eH, eM] = a.endTime.split(':').map(Number);
 						const sMins = sH * 60 + sM;
 						const eMins = eH * 60 + eM;
-						return Math.abs(sMins - (m + 15)) <= 30 || Math.abs(eMins - m) <= 30;
+						const isAdjacent = Math.abs(sMins - (m + 15)) <= 30 || Math.abs(eMins - m) <= 30;
+						if (!isAdjacent) return false;
+
+						const extraWage = 0.25 * staff.hourly_wage;
+						return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
 					});
 
 					if (adjAssign) {
+						const staff = minifiedStaffs.find((s: any) => s.id === adjAssign.assignedStaffId)!;
 						const [sH, sM] = adjAssign.startTime.split(':').map(Number);
 						const [eH, eM] = adjAssign.endTime.split(':').map(Number);
 						const sMins = sH * 60 + sM;
@@ -601,7 +644,8 @@ export const POST: RequestHandler = async ({ request }) => {
 						if (m + 15 > eMins) {
 							adjAssign.endTime = minutesToTime(m + 15);
 						}
-						console.log(`[Store Defense] Gap auto-filled on ${dateStr} at ${minutesToTime(m)}`);
+						earnedWages[staff.id] += 0.25 * staff.hourly_wage;
+						console.log(`[Store Defense] Gap auto-filled on ${dateStr} at ${minutesToTime(m)} for ${staff.name}`);
 					}
 				}
 			}
