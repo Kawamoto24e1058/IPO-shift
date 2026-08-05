@@ -1068,39 +1068,43 @@
 			return;
 		}
 
-		const stamp = stamps.find((s) => s.id === stampId);
-		if (!stamp) return;
-
 		// 曜日別テンプレート (Layer 1) を取得して比較
 		const jsDate = new Date(targetYear, targetMonth - 1, day);
 		const dayOfWeek = jsDate.getDay();
 		const dayTemplates = weeklyTemplates.filter((t) => Number(t.dayOfWeek) === dayOfWeek);
 
 		let isOverridden = true;
-		let finalType = stamp.type;
-		let finalStart = stamp.startTime;
-		let finalEnd = stamp.endTime;
+		let finalType: 'free' | 'ng' | 'specific' = 'free';
+		let finalStart = '';
+		let finalEnd = '';
 
-		if (stamp.id === 'free') {
-			if (dayTemplates.length > 0) {
-				const template = dayTemplates[0];
-				finalType = template.type;
-				finalStart = template.startTime;
-				finalEnd = template.endTime;
+		if (stampId === 'free') {
+			finalType = 'free';
+			finalStart = '09:45';
+			finalEnd = '20:15';
+			if (dayTemplates.length === 0) {
 				isOverridden = false;
-			} else {
+			}
+		} else if (stampId === 'ng') {
+			finalType = 'ng';
+			finalStart = '';
+			finalEnd = '';
+			if (dayTemplates.length > 0 && dayTemplates[0].type === 'ng') {
 				isOverridden = false;
 			}
 		} else {
-			if (dayTemplates.length > 0) {
-				const template = dayTemplates[0];
-				if (
-					stamp.type === template.type &&
-					stamp.startTime === template.startTime &&
-					stamp.endTime === template.endTime
-				) {
-					isOverridden = false;
-				}
+			const stamp = stamps.find((s) => s.id === stampId);
+			if (!stamp) return;
+			finalType = stamp.type;
+			finalStart = stamp.startTime;
+			finalEnd = stamp.endTime;
+			if (
+				dayTemplates.length > 0 &&
+				dayTemplates[0].type === stamp.type &&
+				dayTemplates[0].startTime === stamp.startTime &&
+				dayTemplates[0].endTime === stamp.endTime
+			) {
+				isOverridden = false;
 			}
 		}
 
@@ -1129,7 +1133,7 @@
 		}
 	}
 
-	// カレンダーセルがクリックされた際のスタンプ適用 (おまかせ ↔ NG 直感トグル ＆ 時間スタンプ)
+	// カレンダーセルがクリックされた際のスタンプ適用 (おまかせ ↔ NG 完全2状態トグル)
 	async function applyStampToCell(dateStr: string, day: number) {
 		if (isLocked) {
 			alert('締め切りを過ぎているか、ロックされているため変更できません。');
@@ -1137,7 +1141,7 @@
 		}
 
 		// 1. 直感タップモード (selectedStampId === 'free')
-		// 🟢 おまかせ ➔ 1タップで ❌ NG に切り替え、 ❌ NG ➔ 1タップで 🟢 おまかせ に戻す
+		// 🟢 おまかせ ↔ ❌ NG の完全2状態トグル (3タップ目で特定時間へ変化させない)
 		if (selectedStampId === 'free') {
 			const currentWish = wishes.find((w) => w.date === dateStr);
 			if (currentWish?.type === 'ng') {
@@ -1940,7 +1944,9 @@
 										}}
 										ondblclick={(e) => {
 											e.stopPropagation();
-											enterInlineEditing(cell.dateStr, wish);
+											if (selectedStampId === 'custom') {
+												enterInlineEditing(cell.dateStr, wish);
+											}
 										}}
 										oncontextmenu={(e) => {
 											e.preventDefault();
