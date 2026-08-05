@@ -852,81 +852,87 @@
 		}
 	}
 
-	// カレンダー読込 (Offline-first)
+	// カレンダー読込 (Offline-first ＋ wishes/yearMonth_userId の一元復元)
 	async function loadCalendar(forceFetchTemplates = false) {
 		isLoading = false;
 
 		const currentYear = targetYear;
 		const currentMonth = targetMonth;
 		const currentUserId = userId;
+		const yearMonth = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+		const mainWishDocId = `${yearMonth}_${currentUserId}`;
 
-		// リアルタイムリスナーに読み込みを一本化 (重複fetchと空データ上書きを排除)
 		setupRealtimeShiftListener(currentYear, currentMonth);
 
-		const templatesPromise = getWeeklyTemplates(currentUserId).catch(() => weeklyTemplates);
+		// 1. 統一仕様パス wishes/${yearMonth}_${currentUserId} から当月希望データを復元
+		try {
+			const wishSnap = await getDoc(doc(db, 'wishes', mainWishDocId));
+			if (
+				targetYear === currentYear &&
+				targetMonth === currentMonth &&
+				userId === currentUserId
+			) {
+				if (wishSnap.exists()) {
+					const wishData = wishSnap.data();
+					if (wishData) {
+						isSubmitted = !!wishData.isSubmitted;
+						if (wishData.target_monthly_income > 0) {
+							targetMonthlyIncomeInput = wishData.target_monthly_income;
+						}
+						if (wishData.max_monthly_income > 0) {
+							maxMonthlyIncomeInput = wishData.max_monthly_income;
+						}
+						if (wishData.preferredDaysPerWeek !== undefined) {
+							preferredDaysPerWeekInput = Number(wishData.preferredDaysPerWeek);
+						}
+						if (wishData.dayPreferencePolicy) {
+							dayPreferencePolicyInput = wishData.dayPreferencePolicy;
+						}
 
-		Promise.all([
-			templatesPromise,
-			getDoc(
-				doc(
-					db,
-					'submittals',
-					`${currentUserId}_${currentYear}_${String(currentMonth).padStart(2, '0')}`
-				)
-			)
-				.then((snap) => (snap.exists() ? snap.data() : { isSubmitted: false, isUnlocked: false }))
-				.catch(() => ({ isSubmitted: false, isUnlocked: false }))
-		])
-			.then(async ([templates, submittalData]) => {
-				if (
-					targetYear === currentYear &&
-					targetMonth === currentMonth &&
-					userId === currentUserId
-				) {
-					if (templates) {
-						weeklyTemplates = templates;
-					}
-					isSubmitted = submittalData.isSubmitted === true;
-					userIsUnlocked = submittalData.isUnlocked === true;
-
-					const latestTemplates = templates || weeklyTemplates;
-
-					// 最新のテンプレートを使って当月の wishes をフェッチして例外を抽出
-					try {
-						const dbWishes = await Promise.race([
-							generateMonthlyWishes(currentUserId, currentYear, currentMonth, latestTemplates),
-							new Promise<Wish[]>((_, reject) =>
-								setTimeout(() => reject(new Error('Timeout')), 800)
-							)
-						]);
-						if (
-							targetYear === currentYear &&
-							targetMonth === currentMonth &&
-							userId === currentUserId
-						) {
-							const exceptionsMap: { [dateStr: string]: Wish } = {};
-							dbWishes.forEach((w) => {
-								if (w.isOverridden) {
-									exceptionsMap[w.date] = w;
-								}
+						// 既存の希望データがある場合のみ、overriddenWishes を復元
+						if (wishData.wishes && Object.keys(wishData.wishes).length > 0) {
+							const restoredMap: { [dateStr: string]: Wish } = {};
+							Object.entries(wishData.wishes).forEach(([dStr, w]: [string, any]) => {
+								restoredMap[dStr] = {
+									date: dStr,
+									type: w.type || (w.startTime ? 'specific' : 'free'),
+									startTime: w.startTime || '',
+									endTime: w.endTime || '',
+									isOverridden: true,
+									isSubmitted: !!wishData.isSubmitted
+								};
 							});
-							overriddenWishes = exceptionsMap;
-						}
-					} catch (err) {
-						console.warn('Firestore load slow/failed, holding offline wishes:', err);
-						if (
-							targetYear === currentYear &&
-							targetMonth === currentMonth &&
-							userId === currentUserId
-						) {
-							overriddenWishes = {};
+							overriddenWishes = { ...overriddenWishes, ...restoredMap };
+							console.log(`[Wishes Restore] Successfully restored ${Object.keys(restoredMap).length} wishes for ${mainWishDocId}`);
 						}
 					}
+				} else {
+					console.log(`[Wishes Restore Safe Guard] Document wishes/${mainWishDocId} not found. Keeping local wishes intact.`);
 				}
-			})
-			.catch((err) => {
-				console.warn('Offline-first background sync failed:', err);
-			});
+			}
+		} catch (err) {
+			console.warn(`[Wishes Restore Safe Guard] Firestore fetch failed for ${mainWishDocId}, keeping local state:`, err);
+		}
+
+		// 2. submittals ステータスの取得
+		try {
+			const submittalDocId = `${currentUserId}_${yearMonth}`;
+			const submittalSnap = await getDoc(doc(db, 'submittals', submittalDocId));
+			if (
+				targetYear === currentYear &&
+				targetMonth === currentMonth &&
+				userId === currentUserId &&
+				submittalSnap.exists()
+			) {
+				const sData = submittalSnap.data();
+				if (sData) {
+					isSubmitted = !!sData.isSubmitted;
+					userIsUnlocked = !!sData.isUnlocked;
+				}
+			}
+		} catch (err) {
+			console.warn('[Submittals Load] Failed to load submit status:', err);
+		}
 	}
 
 	// 非常に柔軟でスマートな時間パース関数
