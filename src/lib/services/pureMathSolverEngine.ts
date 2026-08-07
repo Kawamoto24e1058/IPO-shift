@@ -1,6 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
+// Strict Enforcement of Level 1 Guards vs Level 2 Store Cover
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -82,6 +83,58 @@ export function isStaffOff(staff: any, rawDateStr: string): boolean {
 	return false;
 }
 
+/**
+ * 労基法・労働環境ガード: 直前6連勤済みかチェック (7連勤以上物理禁止)
+ */
+function getConsecutiveWorkDaysBefore(
+	staffId: string,
+	currentDateStr: string,
+	assignedDaysMap: { [staffId: string]: Set<string> }
+): number {
+	let count = 0;
+	const [y, m, d] = currentDateStr.split('-').map(Number);
+	const dt = new Date(y, m - 1, d);
+	while (true) {
+		dt.setDate(dt.getDate() - 1);
+		const year = dt.getFullYear();
+		const month = String(dt.getMonth() + 1).padStart(2, '0');
+		const day = String(dt.getDate()).padStart(2, '0');
+		const dateStr = `${year}-${month}-${day}`;
+
+		if (assignedDaysMap[staffId]?.has(dateStr)) {
+			count++;
+		} else {
+			break;
+		}
+	}
+	return count;
+}
+
+/**
+ * 労基法・労働環境ガード: 前日20:15遅番勤務者かチェック (翌日09:45早番物理禁止)
+ */
+function workedLatePreviousDay(
+	staffId: string,
+	currentDateStr: string,
+	assignments: Assignment[]
+): boolean {
+	const [y, m, d] = currentDateStr.split('-').map(Number);
+	const dt = new Date(y, m - 1, d);
+	dt.setDate(dt.getDate() - 1);
+	const year = dt.getFullYear();
+	const month = String(dt.getMonth() + 1).padStart(2, '0');
+	const day = String(dt.getDate()).padStart(2, '0');
+	const prevDateStr = `${year}-${month}-${day}`;
+
+	return assignments.some((a) => {
+		return (
+			a.assignedStaffId === staffId &&
+			normalizeDateStr(a.date) === prevDateStr &&
+			a.endTime === '20:15'
+		);
+	});
+}
+
 export interface EngineInput {
 	year: number;
 	month: number;
@@ -100,6 +153,49 @@ export interface Assignment {
 	assignedStaffId: string;
 	storeDeficit?: boolean;
 	deficitReason?: string;
+}
+
+/**
+ * レベル1：絶対最優先ガード判定（いかなる穴埋め・店舗カバーでも破ってはならない鉄則）
+ */
+function checkLevel1Guard(params: {
+	staff: any;
+	dateStr: string;
+	slotStart: string;
+	slotEnd: string;
+	addedWage: number;
+	earnedWages: { [staffId: string]: number };
+	assignedDays: { [staffId: string]: Set<string> };
+	assignments: Assignment[];
+}): { pass: boolean; reason?: string } {
+	const { staff, dateStr, slotStart, addedWage, earnedWages, assignedDays, assignments } = params;
+	const normalizedTargetDate = normalizeDateStr(dateStr);
+
+	// 1-1. 休み希望日（NG日）の絶対除外 (物理的アサイン100%禁止)
+	if (isStaffOff(staff, normalizedTargetDate)) {
+		return { pass: false, reason: 'NG Day' };
+	}
+
+	// 1-2. 給与上限（maxMonthlyIncome）絶対ストップガード (100%超過禁止)
+	if (earnedWages[staff.id] + addedWage > staff.max_monthly_income) {
+		return { pass: false, reason: 'Max Income Reached' };
+	}
+
+	// 1-3. 7連勤以上物理禁止ガード (連続出勤6日まで)
+	const consDays = getConsecutiveWorkDaysBefore(staff.id, normalizedTargetDate, assignedDays);
+	if (consDays >= 6) {
+		return { pass: false, reason: 'Consecutive Work Limit (7 Days)' };
+	}
+
+	// 1-4. 前日20:15遅番 ➔ 翌日09:45早番物理禁止ガード
+	if (slotStart === '09:45') {
+		const wasLateYesterday = workedLatePreviousDay(staff.id, normalizedTargetDate, assignments);
+		if (wasLateYesterday) {
+			return { pass: false, reason: 'Late Shift Yesterday -> Early Shift Today Prohibited' };
+		}
+	}
+
+	return { pass: true };
 }
 
 export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: Assignment[] } {
@@ -274,7 +370,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（決定論的選定）
+	// Step 3: アサイン実行ループ（決定論的選定 ＋ レベル1ガード）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -307,17 +403,8 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 
 	for (const slot of allSlots) {
 		const normalizedSlotDate = normalizeDateStr(slot.date);
-		const slotJsDate = new Date(slot.date);
-		const slotDay = slotJsDate.getDate();
 
 		const eligibleStaffs = minifiedStaffs.filter((s: any) => {
-			// 1. 休み希望日（NG日）の絶対除外
-			if (isStaffOff(s, normalizedSlotDate)) {
-				console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: NG Day)`);
-				return false;
-			}
-
-			// 2. 勤務可能時間帯の交差計算
 			let availStartMin = 0;
 			let availEndMin = 24 * 60;
 
@@ -349,10 +436,24 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 
 			if (intersectHours < 3.0 && slot.type !== 'UNICES') return false;
 
-			// 4. 給与上限（maxMonthlyIncome）絶対ストップガード
+			const personalStartTime = minutesToTime(intersectStart);
+			const personalEndTime = minutesToTime(intersectEnd);
 			const addedWage = intersectHours * s.hourly_wage;
-			if (earnedWages[s.id] + addedWage > s.max_monthly_income) {
-				console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: Max Income Reached)`);
+
+			// 【レベル1絶対最優先ガードの厳格適用】
+			const lvl1 = checkLevel1Guard({
+				staff: s,
+				dateStr: slot.date,
+				slotStart: personalStartTime,
+				slotEnd: personalEndTime,
+				addedWage,
+				earnedWages,
+				assignedDays,
+				assignments
+			});
+
+			if (!lvl1.pass) {
+				console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: ${lvl1.reason})`);
 				return false;
 			}
 
@@ -382,7 +483,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		});
 
 		if (eligibleStaffs.length > 0) {
-			// スコアリングソート（到達率優先 ＋ 公平性）
 			eligibleStaffs.sort((a: any, b: any) => {
 				const ratioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
 				const ratioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
@@ -445,7 +545,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 4 / STAGE 2: 店舗防衛ロジック（開閉店09:45〜20:15カバー保証）
+	// Step 4 / STAGE 2: 店舗防衛ロジック（レベル1ガード通過者のみ拡張）
 	// ===================================================
 	console.log("=== [ShiftGen Engine STAGE 2] Running 20:15 Store Cover Check ===");
 	for (let d = 1; d <= lastDay; d++) {
@@ -481,12 +581,22 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		if (intervalCount[OPEN_MIN] === 0) {
 			const validCandidates = dayAssignments.filter((a) => {
 				const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
-				if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
+				if (!staff) return false;
 				const [sH, sM] = a.startTime.split(':').map(Number);
 				const oldStartM = sH * 60 + sM;
 				const extraHours = (oldStartM - OPEN_MIN) / 60;
 				const extraWage = extraHours * staff.hourly_wage;
-				return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
+
+				return checkLevel1Guard({
+					staff,
+					dateStr,
+					slotStart: '09:45',
+					slotEnd: a.endTime,
+					addedWage: extraWage,
+					earnedWages,
+					assignedDays,
+					assignments
+				}).pass;
 			});
 
 			if (validCandidates.length > 0) {
@@ -505,16 +615,25 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 
 					earliestAssign.startTime = '09:45';
 					earnedWages[staff.id] += extraWage;
-					console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
+					console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen)`);
 				}
 			} else {
 				const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
-					if (isStaffOff(staff, normalizedTargetDate)) return false;
 					const isAlreadyWorking = dayAssignments.some((a) => a.assignedStaffId === staff.id);
 					if (isAlreadyWorking) return false;
 					const shiftHours = 5.25;
 					const addedWage = shiftHours * staff.hourly_wage;
-					return earnedWages[staff.id] + addedWage <= staff.max_monthly_income;
+
+					return checkLevel1Guard({
+						staff,
+						dateStr,
+						slotStart: '09:45',
+						slotEnd: '15:00',
+						addedWage,
+						earnedWages,
+						assignedDays,
+						assignments
+					}).pass;
 				});
 
 				if (availableNewStaffs.length > 0) {
@@ -530,6 +649,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					assignments.push(newAssign);
 					dayAssignments.push(newAssign);
 					earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
+					assignedDays[bestStaff.id].add(dateStr);
 					console.log(`[Store Defense] New opening cover assigned to ${bestStaff.name} on ${dateStr} (09:45-15:00)`);
 				}
 			}
@@ -539,12 +659,22 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		if (intervalCount[CLOSE_MIN - 15] === 0) {
 			const validCandidates = dayAssignments.filter((a) => {
 				const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
-				if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
+				if (!staff) return false;
 				const [eH, eM] = a.endTime.split(':').map(Number);
 				const oldEndM = eH * 60 + eM;
 				const extraHours = (CLOSE_MIN - oldEndM) / 60;
 				const extraWage = extraHours * staff.hourly_wage;
-				return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
+
+				return checkLevel1Guard({
+					staff,
+					dateStr,
+					slotStart: a.startTime,
+					slotEnd: '20:15',
+					addedWage: extraWage,
+					earnedWages,
+					assignedDays,
+					assignments
+				}).pass;
 			});
 
 			if (validCandidates.length > 0) {
@@ -563,16 +693,25 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 
 					latestAssign.endTime = '20:15';
 					earnedWages[staff.id] += extraWage;
-					console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
+					console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (+${extraWage}yen)`);
 				}
 			} else {
 				const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
-					if (isStaffOff(staff, normalizedTargetDate)) return false;
 					const isAlreadyWorking = dayAssignments.some((a) => a.assignedStaffId === staff.id);
 					if (isAlreadyWorking) return false;
 					const shiftHours = 5.25;
 					const addedWage = shiftHours * staff.hourly_wage;
-					return earnedWages[staff.id] + addedWage <= staff.max_monthly_income;
+
+					return checkLevel1Guard({
+						staff,
+						dateStr,
+						slotStart: '15:00',
+						slotEnd: '20:15',
+						addedWage,
+						earnedWages,
+						assignedDays,
+						assignments
+					}).pass;
 				});
 
 				if (availableNewStaffs.length > 0) {
@@ -588,29 +727,18 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					assignments.push(newAssign);
 					dayAssignments.push(newAssign);
 					earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
+					assignedDays[bestStaff.id].add(dateStr);
 					console.log(`[Store Defense] New closing cover assigned to ${bestStaff.name} on ${dateStr} (15:00-20:15)`);
-				} else if (dayAssignments.length > 0) {
-					// 【絶対強制アサイン】どの方法でも埋まらない場合は当日の最終上がりスタッフを20:15へ強制作業Override
-					const latestAssign = dayAssignments.reduce((prev, curr) => {
-						const [pH, pM] = prev.endTime.split(':').map(Number);
-						const [cH, cM] = curr.endTime.split(':').map(Number);
-						return cH * 60 + cM > pH * 60 + pM ? curr : prev;
-					});
-					const staff = minifiedStaffs.find((s: any) => s.id === latestAssign.assignedStaffId);
-					if (staff) {
-						latestAssign.endTime = '20:15';
-						console.log(`[ShiftGen Stage 2 Force Override] Forced closing shift extension to 20:15 for ${staff.name} on ${dateStr}`);
-					}
 				}
 			}
 		}
 
-		// B. 無人時間帯（0名時間）の自動埋め拡張
+		// B. 無人時間帯（0名時間）の自動埋め拡張 (レベル1ガード通過者のみ)
 		for (let m = OPEN_MIN; m < CLOSE_MIN; m += 15) {
 			if (intervalCount[m] === 0 && dayAssignments.length > 0) {
 				const adjAssign = dayAssignments.find((a) => {
 					const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
-					if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
+					if (!staff) return false;
 					const [sH, sM] = a.startTime.split(':').map(Number);
 					const [eH, eM] = a.endTime.split(':').map(Number);
 					const sMins = sH * 60 + sM;
@@ -619,7 +747,16 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					if (!isAdjacent) return false;
 
 					const extraWage = 0.25 * staff.hourly_wage;
-					return earnedWages[staff.id] + extraWage <= staff.max_monthly_income;
+					return checkLevel1Guard({
+						staff,
+						dateStr,
+						slotStart: m < sMins ? minutesToTime(m) : a.startTime,
+						slotEnd: m + 15 > eMins ? minutesToTime(m + 15) : a.endTime,
+						addedWage: extraWage,
+						earnedWages,
+						assignedDays,
+						assignments
+					}).pass;
 				});
 
 				if (adjAssign) {
@@ -667,8 +804,127 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				endTime: '20:15',
 				assignedStaffId: '',
 				storeDeficit: true,
-				deficitReason: '⚠️ 店舗不備（開閉店枠不足または無人時間あり）'
+				deficitReason: '⚠️ 店舗不備（要管理者補填）'
 			});
+		}
+	}
+
+	// ===================================================
+	// Final Pass: 20:15 閉店枠最終アサイン補正 (レベル1絶対死守)
+	// レベル1をクリアできるスタッフが1人も存在しない場合、強引な上書きは100%禁止し未アサインとして出力
+	// ===================================================
+	console.log("=== [ShiftGen Engine Final Pass] Running 20:15 Closing Cover Final Audit (Level 1 Compliant) ===");
+	for (let d = 1; d <= lastDay; d++) {
+		const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+		const normalizedTargetDate = normalizeDateStr(dateStr);
+
+		const activeAssignments = assignments.filter(
+			(a) => normalizeDateStr(a.date) === normalizedTargetDate && a.assignedStaffId
+		);
+
+		const closingCount = activeAssignments.filter((a) => a.endTime === '20:15').length;
+
+		if (closingCount === 0) {
+			console.log(`[Final Pass 20:15 Audit] Date ${dateStr} has 0 closing staff (20:15). Running Level 1 Compliant 補正...`);
+
+			let extended = false;
+			if (activeAssignments.length > 0) {
+				const sortedCandidates = [...activeAssignments].sort((a, b) => {
+					const [aH, aM] = a.endTime.split(':').map(Number);
+					const [bH, bM] = b.endTime.split(':').map(Number);
+					return (bH * 60 + bM) - (aH * 60 + aM);
+				});
+
+				for (const cand of sortedCandidates) {
+					const staff = minifiedStaffs.find((s: any) => s.id === cand.assignedStaffId);
+					if (!staff) continue;
+
+					const [eH, eM] = cand.endTime.split(':').map(Number);
+					const oldEndM = eH * 60 + eM;
+					if (oldEndM >= 1215) {
+						extended = true;
+						break;
+					}
+
+					const extraHours = (1215 - oldEndM) / 60;
+					const extraWage = extraHours * staff.hourly_wage;
+
+					// レベル1絶対最優先ガードチェック
+					const lvl1 = checkLevel1Guard({
+						staff,
+						dateStr,
+						slotStart: cand.startTime,
+						slotEnd: '20:15',
+						addedWage: extraWage,
+						earnedWages,
+						assignedDays,
+						assignments
+					});
+
+					if (lvl1.pass) {
+						cand.endTime = '20:15';
+						earnedWages[staff.id] += extraWage;
+						extended = true;
+						console.log(`[Final Pass Auto Extension] Extended ${staff.name}'s shift to 20:15 on ${dateStr} (+${extraWage}yen)`);
+						break;
+					} else {
+						console.log(`[Final Pass Extension Blocked] Cannot extend ${staff.name} on ${dateStr} to 20:15 (Reason: ${lvl1.reason})`);
+					}
+				}
+			}
+
+			// 延長が不可能な場合、未出勤の出勤可能スタッフから新規アサイン (レベル1クリア者限定)
+			if (!extended) {
+				const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
+					const isAlreadyWorking = activeAssignments.some((a) => a.assignedStaffId === staff.id);
+					if (isAlreadyWorking) return false;
+					const shiftHours = 5.25;
+					const addedWage = shiftHours * staff.hourly_wage;
+
+					return checkLevel1Guard({
+						staff,
+						dateStr,
+						slotStart: '15:00',
+						slotEnd: '20:15',
+						addedWage,
+						earnedWages,
+						assignedDays,
+						assignments
+					}).pass;
+				});
+
+				if (availableNewStaffs.length > 0) {
+					availableNewStaffs.sort((a: any, b: any) => earnedWages[a.id] - earnedWages[b.id]);
+					const bestStaff = availableNewStaffs[0];
+					const newAssign: Assignment = {
+						date: dateStr,
+						slotId: `${dateStr}_FINAL_PASS_PM_CLOSING_COVER`,
+						startTime: '15:00',
+						endTime: '20:15',
+						assignedStaffId: bestStaff.id
+					};
+					assignments.push(newAssign);
+					earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
+					assignedDays[bestStaff.id].add(dateStr);
+					extended = true;
+					console.log(`[Final Pass New Assign] Assigned ${bestStaff.name} on ${dateStr} (15:00-20:15) for closing cover`);
+				}
+			}
+
+			// レベル1をクリアできるスタッフが1人も存在しない場合：
+			// 休み希望者や上限超えのスタッフを強引に配置せず、⚠️ 未アサイン（要管理者補填）とする！
+			if (!extended) {
+				console.warn(`[Final Pass Level 1 Protection] No staff available for closing cover on ${dateStr} without breaking Level 1 rules. Marking as Unassigned (Store Deficit).`);
+				assignments.push({
+					date: dateStr,
+					slotId: `${dateStr}_CLOSING_STORE_DEFICIT`,
+					startTime: '15:00',
+					endTime: '20:15',
+					assignedStaffId: '',
+					storeDeficit: true,
+					deficitReason: '⚠️ 未アサイン（閉店枠不足・要管理者補填）'
+				});
+			}
 		}
 	}
 
