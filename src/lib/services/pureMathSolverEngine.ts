@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 最優先修正：全スタッフ月間均等分散 (Single Staff Monthly Equal Pacing Engine) ＋ 連続出勤塊（前半偏り）の完全打破
+// 最優先要件追加：フルタイム (09:45-20:15 通し勤務) の物理回避 ＆ 半日シフト分割アサイン
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -256,7 +256,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました (Single Staff Equal Pacing Engine 起動)");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (フルタイム通し勤務回避 Engine 起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
 
 	if (!year || !month || !staffs) {
@@ -433,7 +433,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（全スタッフ月間均等分散 Pacing ＋ レベル1ガード）
+	// Step 3: アサイン実行ループ（フルタイム通し勤務回避 ＋ 個人月間均等 Pacing ＋ レベル1ガード）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -474,6 +474,13 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 
 		const eligibleStaffs = minifiedStaffs.filter((s: any) => {
 			const isAlreadyWorkingToday = assignedDays[s.id]?.has(slot.date);
+
+			// 【フルタイム通し出勤 (09:45-20:15) の回避ルール】
+			// すでに当日に1コマ (例: AM 09:45-15:00) アサイン済みのスタッフは、原則として同日の別コマ (例: PM 15:00-20:15) への連投アサインを遮断！
+			// 半日（5.25時間）シフトをベースとして複数人でシェアさせます
+			if (isAlreadyWorkingToday && slot.type !== 'UNICES') {
+				return false;
+			}
 
 			if (currentDistinctStaffOnDate >= dailyCap && !isAlreadyWorkingToday) {
 				return false;
@@ -562,7 +569,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				const isEmpB = b.isEmployee;
 
 				// 1. 各個人ごとの「週出勤上限キャップ (Weekly Pacing)」を評価
-				// 既に今週TargetDays以上アサインされている人は、他週の枠へ分散させるため絶対優先度を下げます
 				const weekA = getWeeklyAssignedCount(a.id, slot.date, assignedDays);
 				const weekB = getWeeklyAssignedCount(b.id, slot.date, assignedDays);
 				const overWeekA = weekA >= a.weeklyTargetDays + 1;
@@ -577,14 +583,13 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				}
 
 				// 3. 各個人ごとの「当月進捗ペース補正スコア (Pacing Score)」を評価
-				// pacingScore = 実際の給与進捗率 - 日付進行率 (進捗の遅れているスタッフを最優先)
 				const earnedRatioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
 				const earnedRatioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
 
 				let scoreA = earnedRatioA - expectedProgress;
 				let scoreB = earnedRatioB - expectedProgress;
 
-				// 連続日アサインペナルティ (昨日出勤したスタッフは1日以上休みを挟むよう優先度を下げる)
+				// 連続日アサインペナルティ
 				const yesterdayStr = getPreviousDateStr(slot.date);
 				if (assignedDays[a.id]?.has(yesterdayStr)) scoreA += 0.25;
 				if (assignedDays[b.id]?.has(yesterdayStr)) scoreB += 0.25;

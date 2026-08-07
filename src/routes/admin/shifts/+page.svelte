@@ -2983,26 +2983,30 @@
 											<!-- 時間帯 / 開催なし表示 -->
 											<div class="mt-1">
 												{#if isActive}
-													<!-- 時間調整インプット (親セルクリックのトグルバブリング防止) -->
+													<!-- 時間調整インプット (縦積み＋はみ出し防止) -->
 													<!-- svelte-ignore a11y_click_events_have_key_events -->
 													<div
 														role="none"
 														onclick={(e) => e.stopPropagation()}
-														class="flex items-center gap-0.5 text-[9px] font-bold"
+														class="flex flex-col items-center gap-0.5"
 													>
-														<input
-															type="time"
-															bind:value={event.startTime}
-															onchange={saveUnicesAndFsSettings}
-															class="w-full rounded border border-purple-200 bg-white px-0.5 py-0.2 font-bold text-purple-900 focus:outline-none"
-														/>
-														<span class="text-purple-400">~</span>
-														<input
-															type="time"
-															bind:value={event.endTime}
-															onchange={saveUnicesAndFsSettings}
-															class="w-full rounded border border-purple-200 bg-white px-0.5 py-0.2 font-bold text-purple-900 focus:outline-none"
-														/>
+														<div class="flex w-full items-center rounded-lg border border-purple-200 bg-white px-1 py-0.5 shadow-2xs">
+															<input
+																type="time"
+																bind:value={event.startTime}
+																onchange={saveUnicesAndFsSettings}
+																class="w-full text-center font-mono text-[10px] font-extrabold text-purple-950 focus:outline-none [&::-webkit-calendar-picker-indicator]:hidden"
+															/>
+														</div>
+														<span class="text-[8px] font-black text-purple-400 leading-none">↓</span>
+														<div class="flex w-full items-center rounded-lg border border-purple-200 bg-white px-1 py-0.5 shadow-2xs">
+															<input
+																type="time"
+																bind:value={event.endTime}
+																onchange={saveUnicesAndFsSettings}
+																class="w-full text-center font-mono text-[10px] font-extrabold text-purple-950 focus:outline-none [&::-webkit-calendar-picker-indicator]:hidden"
+															/>
+														</div>
 													</div>
 												{:else}
 													<span class="block text-[9px] font-bold text-slate-300">開催なし</span>
