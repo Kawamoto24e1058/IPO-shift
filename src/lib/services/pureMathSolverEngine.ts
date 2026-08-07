@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 全仕様統合型：同時生成・開閉店人数制御（開店1名可・閉店2名必須）・イベント日社員優先・アルバイト長連勤ガード・レベル1ガード優先
+// 全仕様統合型 ＆ 月間均等平坦化（Pacing Engine）：前半集中・後半全空きを完全解消
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -84,6 +84,50 @@ export function isStaffOff(staff: any, rawDateStr: string): boolean {
 }
 
 /**
+ * 前日の日付文字列を取得
+ */
+function getPreviousDateStr(currentDateStr: string): string {
+	const [y, m, d] = currentDateStr.split('-').map(Number);
+	const dt = new Date(y, m - 1, d);
+	dt.setDate(dt.getDate() - 1);
+	const year = dt.getFullYear();
+	const month = String(dt.getMonth() + 1).padStart(2, '0');
+	const day = String(dt.getDate()).padStart(2, '0');
+	return `${year}-${month}-${day}`;
+}
+
+/**
+ * 同一週（月曜〜日曜）における指定スタッフの確定出勤日数をカウント
+ */
+function getWeeklyAssignedCount(
+	staffId: string,
+	dateStr: string,
+	assignedDaysMap: { [staffId: string]: Set<string> }
+): number {
+	const [y, m, d] = dateStr.split('-').map(Number);
+	const currentDt = new Date(y, m - 1, d);
+	const dayOfWeek = currentDt.getDay();
+	const distanceToMon = (dayOfWeek + 6) % 7;
+	const monDt = new Date(currentDt);
+	monDt.setDate(monDt.getDate() - distanceToMon);
+
+	let count = 0;
+	for (let i = 0; i < 7; i++) {
+		const checkDt = new Date(monDt);
+		checkDt.setDate(checkDt.getDate() + i);
+		const year = checkDt.getFullYear();
+		const month = String(checkDt.getMonth() + 1).padStart(2, '0');
+		const day = String(checkDt.getDate()).padStart(2, '0');
+		const checkStr = `${year}-${month}-${day}`;
+
+		if (assignedDaysMap[staffId]?.has(checkStr)) {
+			count++;
+		}
+	}
+	return count;
+}
+
+/**
  * 労基法・連勤ガード: 直前連勤数チェック
  */
 function getConsecutiveWorkDaysBefore(
@@ -118,13 +162,7 @@ function workedLatePreviousDay(
 	currentDateStr: string,
 	assignments: Assignment[]
 ): boolean {
-	const [y, m, d] = currentDateStr.split('-').map(Number);
-	const dt = new Date(y, m - 1, d);
-	dt.setDate(dt.getDate() - 1);
-	const year = dt.getFullYear();
-	const month = String(dt.getMonth() + 1).padStart(2, '0');
-	const day = String(dt.getDate()).padStart(2, '0');
-	const prevDateStr = `${year}-${month}-${day}`;
+	const prevDateStr = getPreviousDateStr(currentDateStr);
 
 	return assignments.some((a) => {
 		return (
@@ -205,10 +243,9 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (月間均等平坦化 Pacing Engine 起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
 	console.log("Loaded Wishes Map:", wishesMapByDate);
-	console.log('[ShiftGen] Received Staff Data:', JSON.stringify(staffs, null, 2));
 
 	if (!year || !month || !staffs) {
 		throw new Error('Missing required parameters: year, month, staffs.');
@@ -267,6 +304,12 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		const targetIncome = s.target_monthly_income || 50000;
 		const effectiveTargetIncome = Math.min(targetIncome, availableDaysCount * avgDailySlotWage);
 
+		// 週あたりの目標出勤日数試算 (Weekly Pacing Target)
+		const targetDaysTotal = Math.ceil(effectiveTargetIncome / avgDailySlotWage);
+		const weeklyTargetDays = s.preferredDaysPerWeek > 0
+			? s.preferredDaysPerWeek
+			: Math.min(6, Math.max(1, Math.ceil(targetDaysTotal / 4.3)));
+
 		return {
 			id: s.id,
 			name: s.name,
@@ -277,6 +320,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			effectiveTargetIncome,
 			max_monthly_income: s.max_monthly_income || (isEmployee ? 300000 : 80000),
 			availableDaysCount,
+			weeklyTargetDays,
 			isTrainee: !!(s.is_trainee || s.isTrainee),
 			minor: (s.age_group || s.role) === 'minor',
 			isUnices: Array.isArray(s.tags) ? s.tags.includes('UNICES') : false,
@@ -288,14 +332,13 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	});
 
 	// ===================================================
-	// Step 2: 空きスロット（席）データの生成（カフェ・FS・UNICES 同時計算）
+	// Step 2: 空きスロット（席）データの生成
 	// ===================================================
 	const minifiedSlots: any[] = [];
 	for (let d = 1; d <= lastDay; d++) {
 		const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 		const isEventDay = eventDates.includes(dateStr) || !!(unicesEventsByDate && unicesEventsByDate[dateStr]?.active);
 
-		// カフェ・コワーキング（常時2名ベース、イベント日は＋1名で3枠）
 		minifiedSlots.push({
 			slotId: `${dateStr}_CW_AM_1`,
 			date: dateStr,
@@ -344,7 +387,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			});
 		}
 
-		// フリースクール (FS) スロット
 		const isFsDay = fsDaysByDate ? fsDaysByDate[dateStr]?.active : false;
 		if (isFsDay) {
 			minifiedSlots.push({
@@ -363,7 +405,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			});
 		}
 
-		// UNICES (イベント枠) スロット
 		const unicesEvent = unicesEventsByDate ? unicesEventsByDate[dateStr] : null;
 		if (unicesEvent && unicesEvent.active) {
 			minifiedSlots.push({
@@ -377,7 +418,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（社員最優先 ＋ レベル1ガード）
+	// Step 3: アサイン実行ループ（月間均等平坦化 Pacing ＋ 社員最優先 ＋ レベル1ガード）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -422,7 +463,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			const specificWish = specificWishKey ? s.wishes[specificWishKey] : null;
 			if (specificWish) {
 				if (specificWish === 'ng') {
-					console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: NG Day)`);
 					return false;
 				} else if (specificWish !== 'free') {
 					const [wStart, wEnd] = specificWish.split('-');
@@ -460,12 +500,9 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				assignments
 			});
 
-			if (!lvl1.pass) {
-				console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: ${lvl1.reason})`);
-				return false;
-			}
+			if (!lvl1.pass) return false;
 
-			// 未成年・研修生ペア禁止ルール
+			// 未成年・研修生ペア物理回避ルール
 			const isMinorOrTrainee = s.minor || s.isTrainee;
 			if (isMinorOrTrainee && (slot.type === 'CW' || slot.type === 'FS')) {
 				const groupPrefix = slot.slotId.substring(0, slot.slotId.lastIndexOf('_'));
@@ -484,29 +521,53 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			});
 			if (isAlreadyAssignedInOverlappingSlot) return false;
 
-			// UNICES 開催日の担当資格チェック
+			// UNICES 担当資格チェック
 			if (slot.type === 'UNICES' && !s.isUnices) return false;
 
 			return true;
 		});
 
 		if (eligibleStaffs.length > 0) {
+			const [y, m, d] = slot.date.split('-').map(Number);
+			const dayNum = d;
+			const expectedProgress = dayNum / lastDay;
+
 			eligibleStaffs.sort((a: any, b: any) => {
 				const isEmpA = a.isEmployee;
 				const isEmpB = b.isEmployee;
 
-				// 1. イベント日 ＆ 開閉店枠 (09:45/20:15) は社員 (isEmployee) を絶対最優先アサイン
+				// 1. イベント日 ＆ 開閉店枠 (09:45/20:15) は社員 (isEmployee) を最優先
 				const isSpecialSlot = isEventDay || slot.startTime === '09:45' || slot.endTime === '20:15';
 				if (isSpecialSlot && isEmpA !== isEmpB) {
 					return isEmpA ? -1 : 1;
 				}
 
-				// 2. 通常枠は希望月収達成率で公平化
-				const ratioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
-				const ratioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
-				if (Math.abs(ratioA - ratioB) > 0.05) {
-					return ratioA - ratioB;
+				// 2. 週出勤目標 (Weekly Pacing) 到達者は後半スロットへ回す
+				const weekA = getWeeklyAssignedCount(a.id, slot.date, assignedDays);
+				const weekB = getWeeklyAssignedCount(b.id, slot.date, assignedDays);
+				const overWeekA = weekA >= a.weeklyTargetDays + 1;
+				const overWeekB = weekB >= b.weeklyTargetDays + 1;
+				if (overWeekA !== overWeekB) {
+					return overWeekA ? 1 : -1;
 				}
+
+				// 3. 当月進捗ペース補正スコア (Pacing Score) 計算
+				// pacingScore = 実際の給与進捗率 - 日付進行率 (未出勤・遅れている者を最優先)
+				const earnedRatioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
+				const earnedRatioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
+
+				let scoreA = earnedRatioA - expectedProgress;
+				let scoreB = earnedRatioB - expectedProgress;
+
+				// 直前出勤ペナルティ (アルバイトの連投防止・1〜2日の自然なインターバル保護)
+				const yesterdayStr = getPreviousDateStr(slot.date);
+				if (!a.isEmployee && assignedDays[a.id]?.has(yesterdayStr)) scoreA += 0.15;
+				if (!b.isEmployee && assignedDays[b.id]?.has(yesterdayStr)) scoreB += 0.15;
+
+				if (Math.abs(scoreA - scoreB) > 0.03) {
+					return scoreA - scoreB;
+				}
+
 				return earnedWages[a.id] - earnedWages[b.id];
 			});
 
