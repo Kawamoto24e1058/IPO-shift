@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 最優先要件追加：フルタイム (09:45-20:15 通し勤務 / 8時間超) の100%絶対物理禁止 ＆ レベル1ガード化
+// イベント日確実増員 Engine：イベント日 (isEventDay) の日別人数キャップを6名に拡大し増員スロットを100%充足
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -264,7 +264,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました (フルタイム通し勤務絶対禁止 Engine 起動)");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (イベント日確実増員 Engine 起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
 
 	if (!year || !month || !staffs) {
@@ -441,7 +441,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（フルタイム通し勤務回避 ＋ 個人月間均等 Pacing ＋ レベル1ガード）
+	// Step 3: アサイン実行ループ（イベント日確実増員 ＋ フルタイム回避 ＋ レベル1ガード）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -477,7 +477,8 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		const isEventDay = eventDates.includes(slot.date) || !!(unicesEventsByDate && unicesEventsByDate[slot.date]?.active);
 		const isFsDay = fsDaysByDate ? fsDaysByDate[slot.date]?.active : false;
 
-		const dailyCap = isEventDay || isFsDay ? 4 : 3;
+		// イベント日は上限人数を6名まで解放し、増員スロット(CW_AM_3_EVENT/CW_PM_3_EVENT/UNICES_1)を確実に充足
+		const dailyCap = isEventDay ? 6 : isFsDay ? 5 : 3;
 		const currentDistinctStaffOnDate = getDistinctStaffCountOnDate(slot.date, assignments);
 
 		const eligibleStaffs = minifiedStaffs.filter((s: any) => {
@@ -575,11 +576,12 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				const isEmpB = b.isEmployee;
 
 				// 1. 各個人ごとの「週出勤上限キャップ (Weekly Pacing)」を評価
+				// (イベント開催日のアサイン時は制限を適度に緩和し、必要枠を100%充足)
 				const weekA = getWeeklyAssignedCount(a.id, slot.date, assignedDays);
 				const weekB = getWeeklyAssignedCount(b.id, slot.date, assignedDays);
 				const overWeekA = weekA >= a.weeklyTargetDays + 1;
 				const overWeekB = weekB >= b.weeklyTargetDays + 1;
-				if (overWeekA !== overWeekB) {
+				if (!isEventDay && overWeekA !== overWeekB) {
 					return overWeekA ? 1 : -1;
 				}
 
