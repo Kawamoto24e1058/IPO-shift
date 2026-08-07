@@ -1226,18 +1226,43 @@
 					}
 				}
 
+				// LocalStorage からの緊急フォールバック読み込み (Firestore遅延対策)
+				let lsTargetIncome = 0;
+				let lsMaxIncome = 0;
+				let lsPreferredDays = 0;
+				let lsPolicy = '';
+				if (typeof window !== 'undefined') {
+					const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+					const lsKeys = [`wish_${yearMonth}_${s.id}`, `wishes_${yearMonth}_${s.id}`];
+					for (const k of lsKeys) {
+						const lsRaw = localStorage.getItem(k);
+						if (lsRaw) {
+							try {
+								const parsed = JSON.parse(lsRaw);
+								if (parsed.offDates && Array.isArray(parsed.offDates)) {
+									rawOffDates.push(...parsed.offDates);
+								}
+								if (parsed.target_monthly_income) lsTargetIncome = Number(parsed.target_monthly_income);
+								if (parsed.max_monthly_income) lsMaxIncome = Number(parsed.max_monthly_income);
+								if (parsed.preferredDaysPerWeek) lsPreferredDays = Number(parsed.preferredDaysPerWeek);
+								if (parsed.dayPreferencePolicy) lsPolicy = parsed.dayPreferencePolicy;
+							} catch {}
+						}
+					}
+				}
+
 				const normalizedOffDates = Array.from(new Set(rawOffDates.map(parseDateStr)));
 
 				return {
 					...s,
 					offDates: normalizedOffDates,
-					target_monthly_income: wishDoc?.target_monthly_income || s.target_monthly_income || 50000,
-					max_monthly_income: wishDoc?.max_monthly_income || s.max_monthly_income || 80000,
+					target_monthly_income: wishDoc?.target_monthly_income || lsTargetIncome || s.target_monthly_income || 50000,
+					max_monthly_income: wishDoc?.max_monthly_income || lsMaxIncome || s.max_monthly_income || 80000,
 					preferredDaysPerWeek:
 						wishDoc?.preferredDaysPerWeek !== undefined
 							? Number(wishDoc.preferredDaysPerWeek)
-							: s.preferredDaysPerWeek || 0,
-					dayPreferencePolicy: wishDoc?.dayPreferencePolicy || s.dayPreferencePolicy || 'ANY'
+							: lsPreferredDays || s.preferredDaysPerWeek || 0,
+					dayPreferencePolicy: wishDoc?.dayPreferencePolicy || lsPolicy || s.dayPreferencePolicy || 'ANY'
 				};
 			});
 
