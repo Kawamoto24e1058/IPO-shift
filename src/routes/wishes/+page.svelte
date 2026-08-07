@@ -21,7 +21,8 @@
 		loadConfirmedShiftsFromLocalCache,
 		getStaffDetails,
 		parseLocalDate,
-		submitShiftChangeRequest
+		submitShiftChangeRequest,
+		formatMergedShiftTimes
 	} from '$lib/services/shiftService';
 	import {
 		type Staff,
@@ -424,7 +425,7 @@
 					staffId,
 					staffName: info.name,
 					role: info.role,
-					timeRangeStr: rangeStrings.join(', ')
+					timeRangeStr: formatMergedShiftTimes(rangeStrings)
 				});
 			}
 		});

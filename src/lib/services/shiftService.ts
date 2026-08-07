@@ -35,6 +35,51 @@ export interface SystemSettings {
 	isLocked: boolean;
 }
 
+export interface TimeSlotRange {
+	start: string; // "09:45"
+	end: string; // "15:15"
+}
+
+/**
+ * 連続する時間帯（15分/30分刻みの細切れコマデータ）を1つのシフト帯へ自動結合（マージ）する関数
+ * 例: ["09:45-15:15", "15:00-15:30", "15:15-15:45"] ➔ "09:45-15:45"
+ */
+export function formatMergedShiftTimes(slots: (TimeSlotRange | string)[]): string {
+	if (!slots || slots.length === 0) return '';
+
+	const parsedSlots: TimeSlotRange[] = slots
+		.map((s) => {
+			if (typeof s === 'string') {
+				const parts = s.split('-');
+				return { start: parts[0] ? parts[0].trim() : '', end: parts[1] ? parts[1].trim() : '' };
+			}
+			return { ...s };
+		})
+		.filter((s) => s.start && s.end);
+
+	if (parsedSlots.length === 0) return '';
+
+	parsedSlots.sort((a, b) => a.start.localeCompare(b.start));
+
+	const merged: TimeSlotRange[] = [];
+	let current = { ...parsedSlots[0] };
+
+	for (let i = 1; i < parsedSlots.length; i++) {
+		const next = parsedSlots[i];
+		if (current.end >= next.start) {
+			if (next.end > current.end) {
+				current.end = next.end;
+			}
+		} else {
+			merged.push(current);
+			current = { ...next };
+		}
+	}
+	merged.push(current);
+
+	return merged.map((m) => `${m.start}-${m.end}`).join(', ');
+}
+
 /**
  * 曜日ごとの時間割（テンプレート）を保存する
  */

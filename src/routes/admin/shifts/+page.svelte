@@ -21,6 +21,7 @@
 		loadConfirmedShiftsFromLocalCache,
 		subscribePendingShiftRequests,
 		updateShiftRequestStatus,
+		formatMergedShiftTimes,
 		type ShiftRequest
 	} from '$lib/services/shiftService';
 	import { runPureMathAutoShiftEngine } from '$lib/services/pureMathSolverEngine';
@@ -400,6 +401,29 @@
 		[dateStr: string]: { startTime: string; endTime: string; active: boolean };
 	}>({});
 
+	let defaultUnicesStartTime = $state('13:00');
+	let defaultUnicesEndTime = $state('15:00');
+
+	function toggleUnicesDate(dateStr: string) {
+		if (!unicesEventsByDate[dateStr]) {
+			unicesEventsByDate[dateStr] = {
+				active: true,
+				startTime: defaultUnicesStartTime || '13:00',
+				endTime: defaultUnicesEndTime || '15:00'
+			};
+		} else {
+			const current = unicesEventsByDate[dateStr].active;
+			unicesEventsByDate[dateStr].active = !current;
+			if (unicesEventsByDate[dateStr].active) {
+				if (!unicesEventsByDate[dateStr].startTime)
+					unicesEventsByDate[dateStr].startTime = defaultUnicesStartTime || '13:00';
+				if (!unicesEventsByDate[dateStr].endTime)
+					unicesEventsByDate[dateStr].endTime = defaultUnicesEndTime || '15:00';
+			}
+		}
+		saveUnicesAndFsSettings().catch(() => {});
+	}
+
 	let considerIncomeWeight = $state<'none' | 'low' | 'high'>('low');
 	let isLoading = $state(false);
 	let isSavedToast = $state(false);
@@ -577,18 +601,19 @@
 
 			if (workingSlots.length === 0) return '';
 
-			const startTime = workingSlots[0];
-			const lastSlot = workingSlots[workingSlots.length - 1];
+			const rawRanges = workingSlots.map((slot) => {
+				const [h, m] = slot.split(':').map(Number);
+				let endM = m + 15;
+				let endH = h;
+				if (endM >= 60) {
+					endM -= 60;
+					endH += 1;
+				}
+				const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
+				return { start: slot, end: endTime };
+			});
 
-			const [h, m] = lastSlot.split(':').map(Number);
-			let endM = m + 15;
-			let endH = h;
-			if (endM >= 60) {
-				endM -= 60;
-				endH += 1;
-			}
-			const endTime = `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
-			return `${startTime}-${endTime}`;
+			return formatMergedShiftTimes(rawRanges);
 		}
 
 		function getAssignedStaffListForCell(dateStr: string, area: 'cafe' | 'fs' | 'unices') {
@@ -2031,6 +2056,10 @@
 	async function saveUnicesAndFsSettings() {
 		try {
 			const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+			if (typeof window !== 'undefined') {
+				localStorage.setItem(`unices_events_${docId}`, JSON.stringify(unicesEventsByDate || {}));
+				localStorage.setItem(`fs_days_${docId}`, JSON.stringify(fsDaysByDate || {}));
+			}
 			const docRef = doc(db, 'system_matrix_settings', docId);
 			await setDoc(
 				docRef,
@@ -2041,7 +2070,7 @@
 				},
 				{ merge: true }
 			);
-			console.log('[Matrix Settings] Successfully saved UNICES & FS schedule to Firestore.');
+			console.log('[Matrix Settings] Successfully saved UNICES & FS schedule to Firestore & LocalStorage.');
 		} catch (e) {
 			console.error('Failed to save matrix settings:', e);
 		}
@@ -2876,84 +2905,113 @@
 				<!-- 左側：UNICESイベント時間設定 (2カラム分) -->
 				<div class="space-y-6 lg:col-span-2">
 					<section
-						class="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.015)]"
+						class="rounded-3xl border border-slate-200/80 bg-white p-6 shadow-[0_8px_30px_rgb(0,0,0,0.015)] space-y-5"
 					>
-						<div class="mb-6 border-b border-slate-100 pb-3">
-							<h2 class="flex items-center gap-2 text-sm font-bold text-slate-800">
-								<span>🌐</span>
-								UNICES 開催日 ＆ 時間帯管理
-							</h2>
-							<p class="mt-1 text-[10px] text-slate-400">
-								選択された月の全日付のUNICES開催の有無と時間を直接設定します。
-							</p>
+						<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-100 pb-4">
+							<div>
+								<h2 class="flex items-center gap-2 text-sm font-extrabold text-slate-800">
+									<span class="flex h-6 w-6 items-center justify-center rounded-lg bg-purple-100 text-purple-600 text-xs">🍇</span>
+									UNICES 開催日 ＆ 時間帯管理
+								</h2>
+								<p class="mt-0.5 text-[11px] font-medium text-slate-400">
+									日付セルをクリック/タップして【ON ↔ OFF】を直感的にトグル切り替えできます。
+								</p>
+							</div>
+
+							<!-- デフォルト時間帯ツールバー -->
+							<div class="flex items-center gap-1.5 rounded-2xl border border-purple-100 bg-purple-50/60 px-3 py-1.5">
+								<span class="text-[11px] font-bold text-purple-900">デフォルト時間:</span>
+								<input
+									type="time"
+									bind:value={defaultUnicesStartTime}
+									class="rounded-md border border-purple-200 bg-white px-1.5 py-0.5 text-[11px] font-bold text-slate-700 focus:outline-none"
+								/>
+								<span class="text-[11px] font-bold text-purple-400">〜</span>
+								<input
+									type="time"
+									bind:value={defaultUnicesEndTime}
+									class="rounded-md border border-purple-200 bg-white px-1.5 py-0.5 text-[11px] font-bold text-slate-700 focus:outline-none"
+								/>
+							</div>
 						</div>
 
-						<div
-							class="grid max-h-[550px] grid-cols-1 gap-4 overflow-y-auto pr-1 sm:grid-cols-2 md:grid-cols-3"
-						>
-							{#each calendarDays as cell}
-								{#if !cell.isPadding}
-									{@const event = unicesEventsByDate[cell.dateStr]}
-									{#if event}
-										<div
-											class="space-y-3 rounded-2xl border border-slate-200/60 bg-slate-50 p-3.5 transition duration-200 hover:bg-white hover:shadow-xs"
-										>
-											<div class="flex items-center justify-between">
-												<span class="text-xs font-bold text-slate-700"
-													>{cell.dayNum}日 ({['日', '月', '火', '水', '木', '金', '土'][
-														cell.dayOfWeek
-													]})</span
-												>
+						<!-- 7列 月間カレンダーグリッド -->
+						<div class="space-y-2">
+							<!-- 曜日ヘッダー (日〜土) -->
+							<div class="grid grid-cols-7 gap-1.5 text-center text-xs font-bold">
+								<div class="py-1 text-rose-500">日</div>
+								<div class="py-1 text-slate-700">月</div>
+								<div class="py-1 text-slate-700">火</div>
+								<div class="py-1 text-slate-700">水</div>
+								<div class="py-1 text-slate-700">木</div>
+								<div class="py-1 text-slate-700">金</div>
+								<div class="py-1 text-sky-500">土</div>
+							</div>
 
-												<!-- 有効トグル -->
-												<label class="relative inline-flex cursor-pointer items-center select-none">
-													<input
-														type="checkbox"
-														bind:checked={event.active}
-														onchange={saveUnicesAndFsSettings}
-														class="peer sr-only"
-													/>
-													<div
-														class="bg-slate-250 peer h-4 w-7 rounded-full peer-checked:bg-indigo-600 peer-focus:outline-none after:absolute after:top-[2px] after:left-[2px] after:h-3 after:w-3 after:rounded-full after:border after:border-slate-300 after:bg-white after:transition-all after:content-[''] peer-checked:after:translate-x-full peer-checked:after:border-white"
-													></div>
-												</label>
+							<!-- カレンダー本体セル (7列) -->
+							<div class="grid grid-cols-7 gap-1.5">
+								{#each calendarDays as cell}
+									{#if cell.isPadding}
+										<div class="min-h-[72px] rounded-2xl bg-slate-50/40 border border-transparent opacity-30"></div>
+									{:else}
+										{@const event = unicesEventsByDate[cell.dateStr] || { active: false, startTime: defaultUnicesStartTime, endTime: defaultUnicesEndTime }}
+										{@const isActive = event.active === true}
+										<div
+											role="button"
+											tabindex="0"
+											onclick={() => toggleUnicesDate(cell.dateStr)}
+											onkeydown={(e) => e.key === 'Enter' && toggleUnicesDate(cell.dateStr)}
+											class="group relative flex min-h-[72px] flex-col justify-between rounded-2xl border p-2 text-left cursor-pointer transition-all duration-200 select-none
+											{isActive
+												? 'border-purple-300 bg-purple-50/90 text-purple-950 shadow-xs ring-1 ring-purple-400/40 hover:bg-purple-100/90'
+												: 'border-slate-200/70 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50'}"
+										>
+											<!-- 日付 ＆ トグルバッジ -->
+											<div class="flex items-center justify-between">
+												<span class="text-xs font-extrabold {cell.dayOfWeek === 0 ? 'text-rose-600' : cell.dayOfWeek === 6 ? 'text-sky-600' : ''}">
+													{cell.dayNum}
+												</span>
+												{#if isActive}
+													<span class="inline-flex items-center gap-0.5 rounded-full bg-purple-600 px-1.5 py-0.2 text-[8px] font-extrabold text-white shadow-xs">
+														✨ EVENT
+													</span>
+												{:else}
+													<span class="text-[9px] font-bold text-slate-300">OFF</span>
+												{/if}
 											</div>
 
-											{#if event.active}
-												<div class="grid grid-cols-2 gap-2 text-[10px]">
-													<div>
-														<span class="mb-0.5 block origin-left scale-90 text-slate-400"
-															>開始</span
-														>
+											<!-- 時間帯 / 開催なし表示 -->
+											<div class="mt-1">
+												{#if isActive}
+													<!-- 時間調整インプット (親セルクリックのトグルバブリング防止) -->
+													<!-- svelte-ignore a11y_click_events_have_key_events -->
+													<div
+														role="none"
+														onclick={(e) => e.stopPropagation()}
+														class="flex items-center gap-0.5 text-[9px] font-bold"
+													>
 														<input
 															type="time"
 															bind:value={event.startTime}
 															onchange={saveUnicesAndFsSettings}
-															class="focus:border-slate-355 w-full rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-bold text-slate-700 focus:outline-none"
+															class="w-full rounded border border-purple-200 bg-white px-0.5 py-0.2 font-bold text-purple-900 focus:outline-none"
 														/>
-													</div>
-													<div>
-														<span class="mb-0.5 block origin-left scale-90 text-slate-400"
-															>終了</span
-														>
+														<span class="text-purple-400">~</span>
 														<input
 															type="time"
 															bind:value={event.endTime}
 															onchange={saveUnicesAndFsSettings}
-															class="focus:border-slate-355 w-full rounded-md border border-slate-200 bg-white px-1.5 py-0.5 font-bold text-slate-700 focus:outline-none"
+															class="w-full rounded border border-purple-200 bg-white px-0.5 py-0.2 font-bold text-purple-900 focus:outline-none"
 														/>
 													</div>
-												</div>
-											{:else}
-												<span
-													class="block rounded-lg bg-slate-100 py-2 text-center font-sans text-[9px] font-semibold text-slate-400 italic"
-													>開催予定なし</span
-												>
-											{/if}
+												{:else}
+													<span class="block text-[9px] font-bold text-slate-300">開催なし</span>
+												{/if}
+											</div>
 										</div>
 									{/if}
-								{/if}
-							{/each}
+								{/each}
+							</div>
 						</div>
 					</section>
 
