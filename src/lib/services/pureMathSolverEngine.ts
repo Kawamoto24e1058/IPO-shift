@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 全仕様統合型 ＆ 月間均等平坦化（Pacing Engine）：前半集中・後半全空きを完全解消
+// 最優先修正：特定日への過剰集中防止 (Daily Cap ＆ 平準化) ＋ 給与上限超過の100%完全遮断
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -128,6 +128,19 @@ function getWeeklyAssignedCount(
 }
 
 /**
+ * 指定日にアサインされているユニークな実スタッフ数を取得 (過密・過疎判定用)
+ */
+function getDistinctStaffCountOnDate(dateStr: string, assignments: Assignment[]): number {
+	const set = new Set<string>();
+	assignments.forEach((a) => {
+		if (a.date === dateStr && a.assignedStaffId) {
+			set.add(a.assignedStaffId);
+		}
+	});
+	return set.size;
+}
+
+/**
  * 労基法・連勤ガード: 直前連勤数チェック
  */
 function getConsecutiveWorkDaysBefore(
@@ -214,7 +227,7 @@ function checkLevel1Guard(params: {
 		return { pass: false, reason: 'NG Day' };
 	}
 
-	// 1-2. 給与上限（maxMonthlyIncome）絶対ストップガード (100%超過禁止)
+	// 1-2. 給与上限（maxMonthlyIncome）絶対ストップガード (1円のオーバーも100%物理遮断)
 	if (earnedWages[staff.id] + addedWage > staff.max_monthly_income) {
 		return { pass: false, reason: 'Max Income Reached' };
 	}
@@ -243,9 +256,8 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました (月間均等平坦化 Pacing Engine 起動)");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (Daily Cap ＆ 給与上限事前遮断エンジン起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
-	console.log("Loaded Wishes Map:", wishesMapByDate);
 
 	if (!year || !month || !staffs) {
 		throw new Error('Missing required parameters: year, month, staffs.');
@@ -304,6 +316,10 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		const targetIncome = s.target_monthly_income || 50000;
 		const effectiveTargetIncome = Math.min(targetIncome, availableDaysCount * avgDailySlotWage);
 
+		// 正確な max_monthly_income の優先取得（オーバーライド防止）
+		const rawMaxIncome = s.max_monthly_income || s.maxMonthlyIncome;
+		const maxMonthlyIncome = rawMaxIncome ? Number(rawMaxIncome) : (isEmployee ? 250000 : 80000);
+
 		// 週あたりの目標出勤日数試算 (Weekly Pacing Target)
 		const targetDaysTotal = Math.ceil(effectiveTargetIncome / avgDailySlotWage);
 		const weeklyTargetDays = s.preferredDaysPerWeek > 0
@@ -318,7 +334,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			hourly_wage: hourlyWage,
 			target_monthly_income: targetIncome,
 			effectiveTargetIncome,
-			max_monthly_income: s.max_monthly_income || (isEmployee ? 300000 : 80000),
+			max_monthly_income: maxMonthlyIncome,
 			availableDaysCount,
 			weeklyTargetDays,
 			isTrainee: !!(s.is_trainee || s.isTrainee),
@@ -418,7 +434,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（月間均等平坦化 Pacing ＋ 社員最優先 ＋ レベル1ガード）
+	// Step 3: アサイン実行ループ（日別人数キャップ Daily Cap ＋ 平準化優先 ＋ 給与上限事前完全遮断）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -452,8 +468,21 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	for (const slot of allSlots) {
 		const normalizedSlotDate = normalizeDateStr(slot.date);
 		const isEventDay = eventDates.includes(slot.date) || !!(unicesEventsByDate && unicesEventsByDate[slot.date]?.active);
+		const isFsDay = fsDaysByDate ? fsDaysByDate[slot.date]?.active : false;
+
+		// 1日あたりの最大アサイン人数制限 (Daily Cap)
+		// 通常日最大3名、イベント日/FS日最大4名
+		const dailyCap = isEventDay || isFsDay ? 4 : 3;
+		const currentDistinctStaffOnDate = getDistinctStaffCountOnDate(slot.date, assignments);
 
 		const eligibleStaffs = minifiedStaffs.filter((s: any) => {
+			const isAlreadyWorkingToday = assignedDays[s.id]?.has(slot.date);
+
+			// 当日アサイン人数が上限に達しており、新規枠追加になる場合は他の過疎日へアサインを回す
+			if (currentDistinctStaffOnDate >= dailyCap && !isAlreadyWorkingToday) {
+				return false;
+			}
+
 			let availStartMin = 0;
 			let availEndMin = 24 * 60;
 
@@ -551,15 +580,13 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					return overWeekA ? 1 : -1;
 				}
 
-				// 3. 当月進捗ペース補正スコア (Pacing Score) 計算
-				// pacingScore = 実際の給与進捗率 - 日付進行率 (未出勤・遅れている者を最優先)
+				// 3. 当月進捗ペース補正スコア (Pacing Score)
 				const earnedRatioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
 				const earnedRatioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
 
 				let scoreA = earnedRatioA - expectedProgress;
 				let scoreB = earnedRatioB - expectedProgress;
 
-				// 直前出勤ペナルティ (アルバイトの連投防止・1〜2日の自然なインターバル保護)
 				const yesterdayStr = getPreviousDateStr(slot.date);
 				if (!a.isEmployee && assignedDays[a.id]?.has(yesterdayStr)) scoreA += 0.15;
 				if (!b.isEmployee && assignedDays[b.id]?.has(yesterdayStr)) scoreB += 0.15;
@@ -600,18 +627,30 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			}
 
 			const assignedHours = getSlotHours(finalStart, finalEnd);
-			const addedWage = assignedHours * selectedStaff.hourly_wage;
+			const actualWage = assignedHours * selectedStaff.hourly_wage;
 
-			assignments.push({
-				date: slot.date,
-				slotId: slot.slotId,
-				startTime: finalStart,
-				endTime: finalEnd,
-				assignedStaffId: selectedStaff.id
-			});
+			// 【給与上限（maxMonthlyIncome）事後絶対ガード】1円でも上限を越える場合はアサインキャンセル
+			if (earnedWages[selectedStaff.id] + actualWage > selectedStaff.max_monthly_income) {
+				console.warn(`[Income Hard Stop] Prevented ${selectedStaff.name} on ${slot.date} (${earnedWages[selectedStaff.id]} + ${actualWage} > ${selectedStaff.max_monthly_income})`);
+				assignments.push({
+					date: slot.date,
+					slotId: slot.slotId,
+					startTime: slot.startTime,
+					endTime: slot.endTime,
+					assignedStaffId: ''
+				});
+			} else {
+				assignments.push({
+					date: slot.date,
+					slotId: slot.slotId,
+					startTime: finalStart,
+					endTime: finalEnd,
+					assignedStaffId: selectedStaff.id
+				});
 
-			earnedWages[selectedStaff.id] += addedWage;
-			assignedDays[selectedStaff.id].add(slot.date);
+				earnedWages[selectedStaff.id] += actualWage;
+				assignedDays[selectedStaff.id].add(slot.date);
+			}
 		} else {
 			assignments.push({
 				date: slot.date,
@@ -692,9 +731,11 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					const extraHours = (oldStartM - OPEN_MIN) / 60;
 					const extraWage = extraHours * staff.hourly_wage;
 
-					earliestAssign.startTime = '09:45';
-					earnedWages[staff.id] += extraWage;
-					console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen)`);
+					if (earnedWages[staff.id] + extraWage <= staff.max_monthly_income) {
+						earliestAssign.startTime = '09:45';
+						earnedWages[staff.id] += extraWage;
+						console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen)`);
+					}
 				}
 			} else {
 				const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
@@ -718,18 +759,21 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				if (availableNewStaffs.length > 0) {
 					availableNewStaffs.sort((a: any, b: any) => earnedWages[a.id] - earnedWages[b.id]);
 					const bestStaff = availableNewStaffs[0];
-					const newAssign = {
-						date: dateStr,
-						slotId: `${dateStr}_CW_AM_OPENING_COVER`,
-						startTime: '09:45',
-						endTime: '15:00',
-						assignedStaffId: bestStaff.id
-					};
-					assignments.push(newAssign);
-					dayAssignments.push(newAssign);
-					earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
-					assignedDays[bestStaff.id].add(dateStr);
-					console.log(`[Store Defense] New opening cover assigned to ${bestStaff.name} on ${dateStr} (09:45-15:00)`);
+					const addedWage = 5.25 * bestStaff.hourly_wage;
+					if (earnedWages[bestStaff.id] + addedWage <= bestStaff.max_monthly_income) {
+						const newAssign = {
+							date: dateStr,
+							slotId: `${dateStr}_CW_AM_OPENING_COVER`,
+							startTime: '09:45',
+							endTime: '15:00',
+							assignedStaffId: bestStaff.id
+						};
+						assignments.push(newAssign);
+						dayAssignments.push(newAssign);
+						earnedWages[bestStaff.id] += addedWage;
+						assignedDays[bestStaff.id].add(dateStr);
+						console.log(`[Store Defense] New opening cover assigned to ${bestStaff.name} on ${dateStr} (09:45-15:00)`);
+					}
 				}
 			}
 		}
@@ -780,9 +824,11 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					const extraHours = (CLOSE_MIN - oldEndM) / 60;
 					const extraWage = extraHours * staff.hourly_wage;
 
-					latestAssign.endTime = '20:15';
-					earnedWages[staff.id] += extraWage;
-					console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (2名閉店カバー)`);
+					if (earnedWages[staff.id] + extraWage <= staff.max_monthly_income) {
+						latestAssign.endTime = '20:15';
+						earnedWages[staff.id] += extraWage;
+						console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (2名閉店カバー)`);
+					}
 				} else {
 					const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
 						const isAlreadyWorking = dayAssignments.some((a) => a.assignedStaffId === staff.id);
@@ -810,18 +856,24 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 							return earnedWages[a.id] - earnedWages[b.id];
 						});
 						const bestStaff = availableNewStaffs[0];
-						const newAssign = {
-							date: dateStr,
-							slotId: `${dateStr}_FS_PM_CLOSING_COVER_${i + 1}`,
-							startTime: '15:00',
-							endTime: '20:15',
-							assignedStaffId: bestStaff.id
-						};
-						assignments.push(newAssign);
-						dayAssignments.push(newAssign);
-						earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
-						assignedDays[bestStaff.id].add(dateStr);
-						console.log(`[Store Defense] New closing cover (2名体制) assigned to ${bestStaff.name} on ${dateStr} (15:00-20:15)`);
+						const addedWage = 5.25 * bestStaff.hourly_wage;
+
+						if (earnedWages[bestStaff.id] + addedWage <= bestStaff.max_monthly_income) {
+							const newAssign = {
+								date: dateStr,
+								slotId: `${dateStr}_FS_PM_CLOSING_COVER_${i + 1}`,
+								startTime: '15:00',
+								endTime: '20:15',
+								assignedStaffId: bestStaff.id
+							};
+							assignments.push(newAssign);
+							dayAssignments.push(newAssign);
+							earnedWages[bestStaff.id] += addedWage;
+							assignedDays[bestStaff.id].add(dateStr);
+							console.log(`[Store Defense] New closing cover (2名体制) assigned to ${bestStaff.name} on ${dateStr} (15:00-20:15)`);
+						} else {
+							break;
+						}
 					} else {
 						break;
 					}
@@ -955,7 +1007,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 							assignments
 						});
 
-						if (lvl1.pass) {
+						if (lvl1.pass && earnedWages[staff.id] + extraWage <= staff.max_monthly_income) {
 							cand.endTime = '20:15';
 							earnedWages[staff.id] += extraWage;
 							extended = true;
@@ -992,19 +1044,23 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 							return earnedWages[a.id] - earnedWages[b.id];
 						});
 						const bestStaff = availableNewStaffs[0];
-						const newAssign: Assignment = {
-							date: dateStr,
-							slotId: `${dateStr}_FINAL_PASS_PM_CLOSING_COVER_${i + 1}`,
-							startTime: '15:00',
-							endTime: '20:15',
-							assignedStaffId: bestStaff.id
-						};
-						assignments.push(newAssign);
-						activeAssignments.push(newAssign);
-						earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
-						assignedDays[bestStaff.id].add(dateStr);
-						extended = true;
-						console.log(`[Final Pass New Assign] Assigned ${bestStaff.name} on ${dateStr} (15:00-20:15) for closing cover`);
+						const addedWage = 5.25 * bestStaff.hourly_wage;
+
+						if (earnedWages[bestStaff.id] + addedWage <= bestStaff.max_monthly_income) {
+							const newAssign: Assignment = {
+								date: dateStr,
+								slotId: `${dateStr}_FINAL_PASS_PM_CLOSING_COVER_${i + 1}`,
+								startTime: '15:00',
+								endTime: '20:15',
+								assignedStaffId: bestStaff.id
+							};
+							assignments.push(newAssign);
+							activeAssignments.push(newAssign);
+							earnedWages[bestStaff.id] += addedWage;
+							assignedDays[bestStaff.id].add(dateStr);
+							extended = true;
+							console.log(`[Final Pass New Assign] Assigned ${bestStaff.name} on ${dateStr} (15:00-20:15) for closing cover`);
+						}
 					}
 				}
 
