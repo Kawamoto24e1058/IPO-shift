@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 最優先修正：特定日への過剰集中防止 (Daily Cap ＆ 平準化) ＋ 給与上限超過の100%完全遮断
+// 最優先修正：全スタッフ月間均等分散 (Single Staff Monthly Equal Pacing Engine) ＋ 連続出勤塊（前半偏り）の完全打破
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -256,7 +256,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました (Daily Cap ＆ 給与上限事前遮断エンジン起動)");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (Single Staff Equal Pacing Engine 起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
 
 	if (!year || !month || !staffs) {
@@ -316,15 +316,14 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		const targetIncome = s.target_monthly_income || 50000;
 		const effectiveTargetIncome = Math.min(targetIncome, availableDaysCount * avgDailySlotWage);
 
-		// 正確な max_monthly_income の優先取得（オーバーライド防止）
 		const rawMaxIncome = s.max_monthly_income || s.maxMonthlyIncome;
 		const maxMonthlyIncome = rawMaxIncome ? Number(rawMaxIncome) : (isEmployee ? 250000 : 80000);
 
-		// 週あたりの目標出勤日数試算 (Weekly Pacing Target)
+		// 週あたりの目標出勤日数 (1名あたりの週上限キャップ)
 		const targetDaysTotal = Math.ceil(effectiveTargetIncome / avgDailySlotWage);
 		const weeklyTargetDays = s.preferredDaysPerWeek > 0
 			? s.preferredDaysPerWeek
-			: Math.min(6, Math.max(1, Math.ceil(targetDaysTotal / 4.3)));
+			: Math.min(5, Math.max(1, Math.ceil(targetDaysTotal / 4.3)));
 
 		return {
 			id: s.id,
@@ -434,7 +433,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	}
 
 	// ===================================================
-	// Step 3: アサイン実行ループ（日別人数キャップ Daily Cap ＋ 平準化優先 ＋ 給与上限事前完全遮断）
+	// Step 3: アサイン実行ループ（全スタッフ月間均等分散 Pacing ＋ レベル1ガード）
 	// ===================================================
 	const assignments: Assignment[] = [];
 	const earnedWages: { [staffId: string]: number } = {};
@@ -470,15 +469,12 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 		const isEventDay = eventDates.includes(slot.date) || !!(unicesEventsByDate && unicesEventsByDate[slot.date]?.active);
 		const isFsDay = fsDaysByDate ? fsDaysByDate[slot.date]?.active : false;
 
-		// 1日あたりの最大アサイン人数制限 (Daily Cap)
-		// 通常日最大3名、イベント日/FS日最大4名
 		const dailyCap = isEventDay || isFsDay ? 4 : 3;
 		const currentDistinctStaffOnDate = getDistinctStaffCountOnDate(slot.date, assignments);
 
 		const eligibleStaffs = minifiedStaffs.filter((s: any) => {
 			const isAlreadyWorkingToday = assignedDays[s.id]?.has(slot.date);
 
-			// 当日アサイン人数が上限に達しており、新規枠追加になる場合は他の過疎日へアサインを回す
 			if (currentDistinctStaffOnDate >= dailyCap && !isAlreadyWorkingToday) {
 				return false;
 			}
@@ -565,13 +561,8 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 				const isEmpA = a.isEmployee;
 				const isEmpB = b.isEmployee;
 
-				// 1. イベント日 ＆ 開閉店枠 (09:45/20:15) は社員 (isEmployee) を最優先
-				const isSpecialSlot = isEventDay || slot.startTime === '09:45' || slot.endTime === '20:15';
-				if (isSpecialSlot && isEmpA !== isEmpB) {
-					return isEmpA ? -1 : 1;
-				}
-
-				// 2. 週出勤目標 (Weekly Pacing) 到達者は後半スロットへ回す
+				// 1. 各個人ごとの「週出勤上限キャップ (Weekly Pacing)」を評価
+				// 既に今週TargetDays以上アサインされている人は、他週の枠へ分散させるため絶対優先度を下げます
 				const weekA = getWeeklyAssignedCount(a.id, slot.date, assignedDays);
 				const weekB = getWeeklyAssignedCount(b.id, slot.date, assignedDays);
 				const overWeekA = weekA >= a.weeklyTargetDays + 1;
@@ -580,19 +571,32 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 					return overWeekA ? 1 : -1;
 				}
 
-				// 3. 当月進捗ペース補正スコア (Pacing Score)
+				// 2. イベント開催日は社員 (isEmployee) を最優先
+				if (isEventDay && isEmpA !== isEmpB) {
+					return isEmpA ? -1 : 1;
+				}
+
+				// 3. 各個人ごとの「当月進捗ペース補正スコア (Pacing Score)」を評価
+				// pacingScore = 実際の給与進捗率 - 日付進行率 (進捗の遅れているスタッフを最優先)
 				const earnedRatioA = earnedWages[a.id] / (a.effectiveTargetIncome || 1);
 				const earnedRatioB = earnedWages[b.id] / (b.effectiveTargetIncome || 1);
 
 				let scoreA = earnedRatioA - expectedProgress;
 				let scoreB = earnedRatioB - expectedProgress;
 
+				// 連続日アサインペナルティ (昨日出勤したスタッフは1日以上休みを挟むよう優先度を下げる)
 				const yesterdayStr = getPreviousDateStr(slot.date);
-				if (!a.isEmployee && assignedDays[a.id]?.has(yesterdayStr)) scoreA += 0.15;
-				if (!b.isEmployee && assignedDays[b.id]?.has(yesterdayStr)) scoreB += 0.15;
+				if (assignedDays[a.id]?.has(yesterdayStr)) scoreA += 0.25;
+				if (assignedDays[b.id]?.has(yesterdayStr)) scoreB += 0.25;
 
 				if (Math.abs(scoreA - scoreB) > 0.03) {
 					return scoreA - scoreB;
+				}
+
+				// 4. スコアが同等の場合にのみ、開閉店枠で社員を優先
+				const isOpeningOrClosing = slot.startTime === '09:45' || slot.endTime === '20:15';
+				if (isOpeningOrClosing && isEmpA !== isEmpB) {
+					return isEmpA ? -1 : 1;
 				}
 
 				return earnedWages[a.id] - earnedWages[b.id];
@@ -629,7 +633,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			const assignedHours = getSlotHours(finalStart, finalEnd);
 			const actualWage = assignedHours * selectedStaff.hourly_wage;
 
-			// 【給与上限（maxMonthlyIncome）事後絶対ガード】1円でも上限を越える場合はアサインキャンセル
+			// 【給与上限（maxMonthlyIncome）事後絶対ガード】
 			if (earnedWages[selectedStaff.id] + actualWage > selectedStaff.max_monthly_income) {
 				console.warn(`[Income Hard Stop] Prevented ${selectedStaff.name} on ${slot.date} (${earnedWages[selectedStaff.id]} + ${actualWage} > ${selectedStaff.max_monthly_income})`);
 				assignments.push({
