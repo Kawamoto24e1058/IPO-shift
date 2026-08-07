@@ -1155,8 +1155,53 @@
 			const month = currentMonth;
 			const lastDay = new Date(year, month, 0).getDate();
 
+			// 0. スタッフ一覧にリアルタイム同期された希望データ (offDates 等) を 100% 確実に合成
+			const parseDateStr = (d: any) => {
+				if (!d) return '';
+				const str = String(d).trim().replace(/\//g, '-').split('T')[0];
+				const parts = str.split('-');
+				if (parts.length === 3) {
+					return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+				}
+				return str;
+			};
+
+			const enrichedStaffs = staffs.map((s) => {
+				const wishDoc = staffWishesDocMap[s.id] || staffWishesDocMap[s.uid || ''];
+
+				const rawOffDates: string[] = [];
+				if (wishDoc?.offDates && Array.isArray(wishDoc.offDates)) {
+					rawOffDates.push(...wishDoc.offDates);
+				}
+				if (s.offDates && Array.isArray(s.offDates)) {
+					rawOffDates.push(...s.offDates);
+				}
+
+				for (let d = 1; d <= lastDay; d++) {
+					const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+					const dayWish = wishesMapByDate[dateStr]?.[s.id];
+					if ((dayWish as any) === 'ng' || dayWish?.type === 'ng') {
+						rawOffDates.push(dateStr);
+					}
+				}
+
+				const normalizedOffDates = Array.from(new Set(rawOffDates.map(parseDateStr)));
+
+				return {
+					...s,
+					offDates: normalizedOffDates,
+					target_monthly_income: wishDoc?.target_monthly_income || s.target_monthly_income || 50000,
+					max_monthly_income: wishDoc?.max_monthly_income || s.max_monthly_income || 80000,
+					preferredDaysPerWeek:
+						wishDoc?.preferredDaysPerWeek !== undefined
+							? Number(wishDoc.preferredDaysPerWeek)
+							: s.preferredDaysPerWeek || 0,
+					dayPreferencePolicy: wishDoc?.dayPreferencePolicy || s.dayPreferencePolicy || 'ANY'
+				};
+			});
+
 			// 1. SvelteKit API エンドポイントを呼び出し
-			console.log('[AutoGenerate] Fetching /api/auto-shift...');
+			console.log('[AutoGenerate] Fetching /api/auto-shift with enriched staffs count:', enrichedStaffs.length);
 			const response = await fetch('/api/auto-shift', {
 				method: 'POST',
 				headers: {
@@ -1165,7 +1210,7 @@
 				body: JSON.stringify({
 					year,
 					month,
-					staffs,
+					staffs: enrichedStaffs,
 					wishesMapByDate,
 					unicesEventsByDate,
 					fsDaysByDate,

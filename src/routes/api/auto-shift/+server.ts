@@ -569,7 +569,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			});
 
 			// A1. 開店カバー判定 (09:45の開始が0名の場合)
-			if (intervalCount[OPEN_MIN] === 0 && dayAssignments.length > 0) {
+			if (intervalCount[OPEN_MIN] === 0) {
 				const validCandidates = dayAssignments.filter((a) => {
 					const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
 					if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
@@ -598,11 +598,37 @@ export const POST: RequestHandler = async ({ request }) => {
 						earnedWages[staff.id] += extraWage;
 						console.log(`[Store Defense] Opening auto-extended to 09:45 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
 					}
+				} else {
+					// 該当日に勤務中スタッフの延長が不可能な場合、未出勤の出勤可能スタッフから新規アサイン (09:45-15:00)
+					const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
+						if (isStaffOff(staff, normalizedTargetDate)) return false;
+						const isAlreadyWorking = dayAssignments.some((a) => a.assignedStaffId === staff.id);
+						if (isAlreadyWorking) return false;
+						const shiftHours = 5.25;
+						const addedWage = shiftHours * staff.hourly_wage;
+						return earnedWages[staff.id] + addedWage <= staff.max_monthly_income;
+					});
+
+					if (availableNewStaffs.length > 0) {
+						availableNewStaffs.sort((a: any, b: any) => earnedWages[a.id] - earnedWages[b.id]);
+						const bestStaff = availableNewStaffs[0];
+						const newAssign = {
+							date: dateStr,
+							slotId: `${dateStr}_CW_AM_OPENING_COVER`,
+							startTime: '09:45',
+							endTime: '15:00',
+							assignedStaffId: bestStaff.id
+						};
+						assignments.push(newAssign);
+						dayAssignments.push(newAssign);
+						earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
+						console.log(`[Store Defense] New opening cover assigned to ${bestStaff.name} on ${dateStr} (09:45-15:00)`);
+					}
 				}
 			}
 
 			// A2. 閉店カバー判定 (20:15の終了が0名の場合)
-			if (intervalCount[CLOSE_MIN - 15] === 0 && dayAssignments.length > 0) {
+			if (intervalCount[CLOSE_MIN - 15] === 0) {
 				const validCandidates = dayAssignments.filter((a) => {
 					const staff = minifiedStaffs.find((s: any) => s.id === a.assignedStaffId);
 					if (!staff || isStaffOff(staff, normalizedTargetDate)) return false;
@@ -630,6 +656,32 @@ export const POST: RequestHandler = async ({ request }) => {
 						latestAssign.endTime = '20:15';
 						earnedWages[staff.id] += extraWage;
 						console.log(`[Store Defense] Closing auto-extended to 20:15 for ${staff.name} on ${dateStr} (+${extraWage}yen, total: ${earnedWages[staff.id]}yen)`);
+					}
+				} else {
+					// 該当日に勤務中スタッフの延長が不可能な場合、未出勤の出勤可能スタッフから新規アサイン (15:00-20:15)
+					const availableNewStaffs = minifiedStaffs.filter((staff: any) => {
+						if (isStaffOff(staff, normalizedTargetDate)) return false;
+						const isAlreadyWorking = dayAssignments.some((a) => a.assignedStaffId === staff.id);
+						if (isAlreadyWorking) return false;
+						const shiftHours = 5.25;
+						const addedWage = shiftHours * staff.hourly_wage;
+						return earnedWages[staff.id] + addedWage <= staff.max_monthly_income;
+					});
+
+					if (availableNewStaffs.length > 0) {
+						availableNewStaffs.sort((a: any, b: any) => earnedWages[a.id] - earnedWages[b.id]);
+						const bestStaff = availableNewStaffs[0];
+						const newAssign = {
+							date: dateStr,
+							slotId: `${dateStr}_FS_PM_CLOSING_COVER`,
+							startTime: '15:00',
+							endTime: '20:15',
+							assignedStaffId: bestStaff.id
+						};
+						assignments.push(newAssign);
+						dayAssignments.push(newAssign);
+						earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
+						console.log(`[Store Defense] New closing cover assigned to ${bestStaff.name} on ${dateStr} (15:00-20:15)`);
 					}
 				}
 			}
