@@ -1275,8 +1275,25 @@
 			// Svelteが再描画を確実に検知できるよう、再代入を実行して一瞬で即時再描画させる！
 			monthlyConfirmedShifts = { ...newShiftsMap };
 
-			// ローカルストレージキャッシュに即時保存して別ページ移動時も画面の消失を防ぐ
+			// 1. ローカルストレージキャッシュに即時保存 (0ms 復元保護)
 			saveConfirmedShiftsToLocalCache(year, month, newShiftsMap);
+
+			// 2. Firestore の shifts/${yearMonth} ドキュメントへ自動 setDoc (永続化 ＆ 画面移動/リロード消去防止)
+			const targetYearMonth = `${year}-${String(month).padStart(2, '0')}`;
+			try {
+				await setDoc(
+					doc(db, 'shifts', targetYearMonth),
+					{
+						yearMonth: targetYearMonth,
+						assignments: newShiftsMap,
+						updatedAt: Timestamp.now()
+					},
+					{ merge: true }
+				);
+				console.log(`[AutoGenerate] Auto-persisted generated shifts to Firestore doc shifts/${targetYearMonth}`);
+			} catch (fsErr) {
+				console.warn(`[AutoGenerate] Firestore auto-persist skipped or failed, local cache preserved:`, fsErr);
+			}
 
 			// 自動生成完了時は「未確定・ステージング（仮プレビュー）」状態にする！
 			isStaging = true;

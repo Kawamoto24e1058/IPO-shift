@@ -34,30 +34,50 @@ function minutesToTime(m: number): string {
 	return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
 }
 
-function normalizeDateStr(str: string): string {
-	if (!str) return '';
-	const cleaned = String(str).trim().replace(/\//g, '-');
-	const parts = cleaned.split('-');
-	if (parts.length === 3) {
-		const year = parts[0];
-		const month = parts[1].padStart(2, '0');
-		const day = parts[2].padStart(2, '0');
+function normalizeDateStr(d: any): string {
+	if (!d) return '';
+	if (typeof d === 'string') {
+		const cleaned = d.trim().replace(/\//g, '-').split('T')[0];
+		const parts = cleaned.split('-');
+		if (parts.length === 3) {
+			const year = parts[0];
+			const month = String(parts[1]).padStart(2, '0');
+			const day = String(parts[2]).padStart(2, '0');
+			if (!isNaN(Number(year)) && !isNaN(Number(month)) && !isNaN(Number(day))) {
+				return `${year}-${month}-${day}`;
+			}
+		}
+	}
+	const dt = new Date(d);
+	if (!isNaN(dt.getTime())) {
+		const year = dt.getFullYear();
+		const month = String(dt.getMonth() + 1).padStart(2, '0');
+		const day = String(dt.getDate()).padStart(2, '0');
 		return `${year}-${month}-${day}`;
 	}
-	return cleaned;
+	return String(d);
 }
 
 function isStaffOff(staff: any, rawDateStr: string): boolean {
 	const normalizedTargetDate = normalizeDateStr(rawDateStr);
 
-	if (Array.isArray(staff.offDates) && staff.offDates.some((d: string) => normalizeDateStr(d) === normalizedTargetDate)) {
-		return true;
+	if (Array.isArray(staff.offDates)) {
+		const isMatch = staff.offDates.some((d: any) => normalizeDateStr(d) === normalizedTargetDate);
+		if (isMatch) return true;
+	}
+
+	if (Array.isArray(staff.unavailables)) {
+		const isMatch = staff.unavailables.some((d: any) => normalizeDateStr(d) === normalizedTargetDate);
+		if (isMatch) return true;
 	}
 
 	if (staff.wishes) {
 		const wishKey = Object.keys(staff.wishes).find((k) => normalizeDateStr(k) === normalizedTargetDate);
-		if (wishKey && staff.wishes[wishKey] === 'ng') {
-			return true;
+		if (wishKey) {
+			const val = staff.wishes[wishKey];
+			if (val === 'ng' || (typeof val === 'object' && val?.type === 'ng')) {
+				return true;
+			}
 		}
 	}
 
@@ -123,7 +143,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				}
 
 				if (dayWish) {
-					if (dayWish.type === 'ng') {
+					if (dayWish === 'ng' || dayWish.type === 'ng') {
 						normalizedOffDatesSet.add(dateStr);
 						wishes[dateStr] = 'ng';
 					} else if (dayWish.type === 'specific') {
