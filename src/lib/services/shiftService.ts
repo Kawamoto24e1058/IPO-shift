@@ -1078,3 +1078,70 @@ export function subscribeMonthlyWishes(
 		}
 	);
 }
+
+// ===================================================
+// シフト確定後の修正リクエスト（申請・承認・リアルタイム通知）
+// ===================================================
+
+export interface ShiftRequest {
+	id?: string;
+	userId: string;
+	userName: string;
+	date: string;
+	reason: string;
+	type: 'cancel' | 'change';
+	status: 'pending' | 'approved' | 'rejected';
+	createdAt?: any;
+}
+
+/**
+ * スタッフからのシフト修正・変更依頼を Firestore shift_requests に提出する
+ */
+export async function submitShiftChangeRequest(req: ShiftRequest): Promise<string> {
+	const requestsRef = collection(db, 'shift_requests');
+	const docRef = doc(requestsRef);
+	const payload = {
+		id: docRef.id,
+		userId: req.userId,
+		userName: req.userName,
+		date: req.date,
+		reason: req.reason,
+		type: req.type || 'cancel',
+		status: 'pending',
+		createdAt: Timestamp.now()
+	};
+	await setDoc(docRef, payload);
+	return docRef.id;
+}
+
+/**
+ * 管理者向け：未処理（pending）の修正依頼をリアルタイム監視する
+ */
+export function subscribePendingShiftRequests(callback: (requests: ShiftRequest[]) => void): Unsubscribe {
+	const q = query(collection(db, 'shift_requests'), where('status', '==', 'pending'));
+	return onSnapshot(
+		q,
+		(snapshot) => {
+			const list: ShiftRequest[] = snapshot.docs.map((docSnap) => ({
+				id: docSnap.id,
+				...docSnap.data()
+			})) as ShiftRequest[];
+			callback(list);
+		},
+		(err) => {
+			console.warn('[ShiftService] subscribePendingShiftRequests error:', err);
+			callback([]);
+		}
+	);
+}
+
+/**
+ * 管理者向け：修正依頼を承認/却下処理する
+ */
+export async function updateShiftRequestStatus(
+	requestId: string,
+	status: 'approved' | 'rejected'
+): Promise<void> {
+	const docRef = doc(db, 'shift_requests', requestId);
+	await setDoc(docRef, { status, resolvedAt: Timestamp.now() }, { merge: true });
+}

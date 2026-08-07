@@ -18,7 +18,10 @@
 		subscribeMonthlyConfirmedShifts,
 		subscribeMonthlyWishes,
 		saveConfirmedShiftsToLocalCache,
-		loadConfirmedShiftsFromLocalCache
+		loadConfirmedShiftsFromLocalCache,
+		subscribePendingShiftRequests,
+		updateShiftRequestStatus,
+		type ShiftRequest
 	} from '$lib/services/shiftService';
 	import { runPureMathAutoShiftEngine } from '$lib/services/pureMathSolverEngine';
 	import { authState } from '../../../lib/services/authService.svelte.ts';
@@ -419,6 +422,52 @@
 		y: 0
 	});
 
+	let pendingShiftRequests = $state<ShiftRequest[]>([]);
+	let isRequestModalOpen = $state(false);
+
+	onMount(() => {
+		loadMonthData();
+		const unsubReqs = subscribePendingShiftRequests((reqs) => {
+			pendingShiftRequests = reqs;
+		});
+		return () => {
+			if (unsubReqs) unsubReqs();
+		};
+	});
+
+	async function handleApproveShiftRequest(req: ShiftRequest) {
+		if (!req.id) return;
+		try {
+			await updateShiftRequestStatus(req.id, 'approved');
+			if (req.date && req.userId) {
+				const shift = monthlyConfirmedShifts[req.date];
+				if (shift && shift.slots) {
+					const slotsCopy: { [time: string]: ShiftAssignment[] } = {};
+					TIME_SLOTS.forEach((slot) => {
+						slotsCopy[slot] = shift.slots[slot] ? [...shift.slots[slot]] : [];
+						slotsCopy[slot] = slotsCopy[slot].filter((a) => a.staffId !== req.userId);
+					});
+					monthlyConfirmedShifts[req.date] = { ...shift, slots: slotsCopy };
+					monthlyConfirmedShifts = { ...monthlyConfirmedShifts };
+					await saveSingleDailyShift(req.date);
+				}
+			}
+			console.log(`[ShiftRequest] Approved request ${req.id} for ${req.userName}`);
+		} catch (err) {
+			console.error('Failed to approve shift request:', err);
+		}
+	}
+
+	async function handleRejectShiftRequest(req: ShiftRequest) {
+		if (!req.id) return;
+		try {
+			await updateShiftRequestStatus(req.id, 'rejected');
+			console.log(`[ShiftRequest] Rejected request ${req.id} for ${req.userName}`);
+		} catch (err) {
+			console.error('Failed to reject shift request:', err);
+		}
+	}
+
 	// ログインユーザー自身をスタッフ一覧へ反映させるためのトリガー
 	$effect(() => {
 		if (authState.user && authState.user.uid) {
@@ -575,7 +624,8 @@
 			return TIME_SLOTS.some((slot) => {
 				const assignments = shift.slots[slot] || [];
 				const cafeCount = assignments.filter((a) => a.area === 'cafe').length;
-				const required = (slot === '09:45' ? 1 : 2) + (isEvent ? 1 : 0);
+				// 09:45開店は1名OK、20:15閉店は2名必須、日中は1名以上存在で充足
+				const required = (slot === '20:15' ? 2 : 1) + (isEvent ? 1 : 0);
 				return cafeCount < required;
 			});
 		}
@@ -1462,7 +1512,7 @@
 		return staffInfo;
 	}
 
-	// カフェ不足チェック (常時2名, 09:45は1名)
+	// カフェ不足チェック (09:45開店は1名OK, 20:15閉店は2名必須, 日中は1名以上で充足)
 	function checkCafeShortage(dateStr: string): boolean {
 		const shift = monthlyConfirmedShifts[dateStr];
 		if (!shift || !shift.slots) return true;
@@ -1470,7 +1520,7 @@
 		return TIME_SLOTS.some((slot) => {
 			const assignments = shift.slots[slot] || [];
 			const cafeCount = assignments.filter((a) => a.area === 'cafe').length;
-			const required = slot === '09:45' ? 1 : 2;
+			const required = slot === '20:15' ? 2 : 1;
 			return cafeCount < required;
 		});
 	}
@@ -2005,6 +2055,10 @@
 	async function saveSingleDailyShift(dateStr: string) {
 		const shift = monthlyConfirmedShifts[dateStr];
 		if (shift) {
+			// 1. LocalStorage キャッシュへ即時保存 (0ms 復元保護)
+			saveConfirmedShiftsToLocalCache(currentYear, currentMonth, monthlyConfirmedShifts);
+
+			// 2. Firestore confirmed_shifts ＆ shifts/${targetYearMonth} へ即時永続保存
 			try {
 				const docRef = doc(db, 'confirmed_shifts', dateStr);
 				await setDoc(docRef, {
@@ -2012,6 +2066,17 @@
 					slots: shift.slots || {},
 					updatedAt: Timestamp.now()
 				});
+
+				const targetYearMonth = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+				await setDoc(
+					doc(db, 'shifts', targetYearMonth),
+					{
+						yearMonth: targetYearMonth,
+						assignments: monthlyConfirmedShifts,
+						updatedAt: Timestamp.now()
+					},
+					{ merge: true }
+				);
 
 				// バックグラウンドで Notion に同期 (awaitせず実行)
 				if (shift.slots) {
@@ -2670,6 +2735,17 @@
 								</button>
 							</div>
 
+							{#if pendingShiftRequests.length > 0}
+								<button
+									type="button"
+									onclick={() => (isRequestModalOpen = true)}
+									class="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-full bg-rose-600 px-4 py-2 font-sans text-[10px] font-extrabold text-white shadow-md transition-all duration-300 hover:bg-rose-700 hover:scale-[1.02] active:scale-95 animate-bounce"
+								>
+									<span class="inline-block h-2 w-2 rounded-full bg-white animate-ping"></span>
+									<span>🔴 修正依頼 ({pendingShiftRequests.length}件)</span>
+								</button>
+							{/if}
+
 							<button
 								type="button"
 								onclick={triggerMonthlyAutoGenerate}
@@ -3233,6 +3309,61 @@
 				<p class="mt-0.5 text-[10px] font-medium text-emerald-100">
 					Firestoreへ確定更新されました。全端末へ0秒でリアルタイム同期されます。
 				</p>
+			</div>
+		</div>
+	{/if}
+
+	{#if isRequestModalOpen}
+		<div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+			<div class="w-full max-w-lg space-y-4 rounded-3xl bg-white p-6 shadow-2xl">
+				<div class="flex items-center justify-between border-b border-slate-100 pb-3">
+					<h3 class="flex items-center gap-2 text-base font-extrabold text-slate-800">
+						<span class="inline-block h-3 w-3 animate-pulse rounded-full bg-rose-500"></span>
+						スタッフからの修正依頼一覧 ({pendingShiftRequests.length}件)
+					</h3>
+					<button
+						type="button"
+						onclick={() => (isRequestModalOpen = false)}
+						class="text-lg font-bold text-slate-400 hover:text-slate-600 cursor-pointer"
+					>
+						✕
+					</button>
+				</div>
+
+				{#if pendingShiftRequests.length === 0}
+					<p class="py-8 text-center text-sm font-medium text-slate-500">現在、未処理の修正依頼はありません。</p>
+				{:else}
+					<div class="max-h-[380px] space-y-3 overflow-y-auto pr-1">
+						{#each pendingShiftRequests as req}
+							<div class="space-y-2.5 rounded-2xl border border-rose-100 bg-rose-50/50 p-4 shadow-xs">
+								<div class="flex items-center justify-between text-xs font-bold text-slate-700">
+									<span class="rounded-lg bg-rose-100 px-2.5 py-1 text-rose-700">{req.date}</span>
+									<span class="text-sm font-black text-slate-900">{req.userName}</span>
+								</div>
+								<div class="rounded-xl border border-slate-100 bg-white p-3 text-xs text-slate-600">
+									<span class="font-bold text-slate-400">申請理由: </span>
+									<span class="font-medium text-slate-800">{req.reason || '理由の記述なし'}</span>
+								</div>
+								<div class="flex justify-end gap-2 pt-1">
+									<button
+										type="button"
+										onclick={() => handleRejectShiftRequest(req)}
+										class="cursor-pointer rounded-xl bg-slate-200 px-4 py-2 text-xs font-bold text-slate-700 transition hover:bg-slate-300 active:scale-95"
+									>
+										却下
+									</button>
+									<button
+										type="button"
+										onclick={() => handleApproveShiftRequest(req)}
+										class="cursor-pointer rounded-xl bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-rose-700 active:scale-95"
+									>
+										承認（シフトを外す）
+									</button>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
 			</div>
 		</div>
 	{/if}

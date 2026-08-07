@@ -20,7 +20,8 @@
 		saveConfirmedShiftsToLocalCache,
 		loadConfirmedShiftsFromLocalCache,
 		getStaffDetails,
-		parseLocalDate
+		parseLocalDate,
+		submitShiftChangeRequest
 	} from '$lib/services/shiftService';
 	import {
 		type Staff,
@@ -1319,6 +1320,42 @@
 			}
 		};
 	});
+
+	let isReqModalOpen = $state(false);
+	let reqTargetDate = $state('');
+	let reqReason = $state('');
+	let isReqSubmitting = $state(false);
+	let reqToast = $state(false);
+
+	async function handleSendShiftRequest() {
+		if (!reqTargetDate || !reqReason.trim()) {
+			alert('対象日付と申請理由を入力してください。');
+			return;
+		}
+		isReqSubmitting = true;
+		try {
+			const me = staffs.find((s) => s.id === userId) || { name: authState.user?.name || 'スタッフ' };
+			await submitShiftChangeRequest({
+				userId: userId,
+				userName: me.name,
+				date: reqTargetDate,
+				reason: reqReason.trim(),
+				type: 'cancel',
+				status: 'pending'
+			});
+			isReqModalOpen = false;
+			reqReason = '';
+			reqToast = true;
+			setTimeout(() => {
+				reqToast = false;
+			}, 4000);
+		} catch (err) {
+			console.error('Failed to submit shift request:', err);
+			alert('修正依頼の送信に失敗しました。');
+		} finally {
+			isReqSubmitting = false;
+		}
+	}
 </script>
 
 <svelte:window onclick={handleWindowClick} />
@@ -2602,15 +2639,89 @@
 			</div>
 
 			<!-- モーダルアクション -->
-			<div class="flex justify-end border-t border-slate-100 pt-2">
+			<div class="flex items-center justify-between border-t border-slate-100 pt-3">
+				<button
+					type="button"
+					onclick={() => {
+						reqTargetDate = detailModalDay?.dateStr || '';
+						isDetailModalOpen = false;
+						isReqModalOpen = true;
+					}}
+					class="cursor-pointer rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-xs font-extrabold text-rose-700 transition hover:bg-rose-100 active:scale-95"
+				>
+					📝 シフト修正・キャンセル依頼
+				</button>
+
 				<button
 					type="button"
 					onclick={() => (isDetailModalOpen = false)}
-					class="rounded-full bg-slate-900 px-6 py-2.5 text-xs font-bold text-white shadow-sm transition-all duration-300 ease-in-out hover:bg-slate-800"
+					class="cursor-pointer rounded-full bg-slate-900 px-6 py-2.5 text-xs font-bold text-white shadow-sm transition-all duration-300 ease-in-out hover:bg-slate-800"
 				>
 					閉じる
 				</button>
 			</div>
 		</div>
+	</div>
+{/if}
+
+{#if isReqModalOpen}
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4 backdrop-blur-xs">
+		<div class="w-full max-w-md space-y-4 rounded-3xl bg-white p-6 shadow-2xl">
+			<div class="flex items-center justify-between border-b border-slate-100 pb-3">
+				<h3 class="flex items-center gap-2 text-sm font-extrabold text-slate-800">
+					<span>📝 シフト修正・変更依頼の送信</span>
+				</h3>
+				<button
+					type="button"
+					onclick={() => (isReqModalOpen = false)}
+					class="cursor-pointer text-lg font-bold text-slate-400 hover:text-slate-600"
+				>
+					✕
+				</button>
+			</div>
+			<div class="space-y-3.5 text-xs">
+				<div>
+					<label class="mb-1 block font-bold text-slate-700">対象日付</label>
+					<input
+						type="date"
+						bind:value={reqTargetDate}
+						class="w-full rounded-xl border border-slate-200 p-2.5 font-mono text-xs font-bold text-slate-800 focus:border-indigo-500 focus:outline-hidden"
+					/>
+				</div>
+				<div>
+					<label class="mb-1 block font-bold text-slate-700">申請理由（体調不良・急用など）</label>
+					<textarea
+						bind:value={reqReason}
+						rows="3"
+						placeholder="管理者へ伝える理由を記入してください..."
+						class="w-full rounded-xl border border-slate-200 p-2.5 text-xs text-slate-800 focus:border-indigo-500 focus:outline-hidden"
+					></textarea>
+				</div>
+			</div>
+			<div class="flex justify-end gap-2 pt-2">
+				<button
+					type="button"
+					onclick={() => (isReqModalOpen = false)}
+					class="cursor-pointer rounded-xl bg-slate-200 px-4 py-2 text-xs font-bold text-slate-700 hover:bg-slate-300 active:scale-95"
+				>
+					キャンセル
+				</button>
+				<button
+					type="button"
+					disabled={isReqSubmitting}
+					onclick={handleSendShiftRequest}
+					class="cursor-pointer rounded-xl bg-rose-600 px-5 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-rose-700 disabled:opacity-50 active:scale-95"
+				>
+					{isReqSubmitting ? '送信中...' : '管理者へ依頼を送信'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if reqToast}
+	<div class="fixed right-6 bottom-6 z-50 flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3.5 text-xs font-bold text-white shadow-2xl">
+		<span>✅</span>
+		<span>管理者の画面へ修正依頼を送信しました。</span>
 	</div>
 {/if}
