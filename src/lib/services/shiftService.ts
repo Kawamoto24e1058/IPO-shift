@@ -559,9 +559,13 @@ export function saveConfirmedShiftsToLocalCache(
 	shiftsMap: { [dateStr: string]: DailyShift }
 ) {
 	if (typeof window === 'undefined') return;
-	const key = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
+	const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+	const key1 = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
+	const key2 = `shifts_${yearMonth}`;
 	try {
-		localStorage.setItem(key, JSON.stringify(shiftsMap));
+		const jsonStr = JSON.stringify(shiftsMap);
+		localStorage.setItem(key1, jsonStr);
+		localStorage.setItem(key2, jsonStr);
 	} catch (e) {
 		console.warn('[ShiftService] Failed to save shifts to local cache:', e);
 	}
@@ -572,8 +576,10 @@ export function loadConfirmedShiftsFromLocalCache(
 	month: number
 ): { [dateStr: string]: DailyShift } | null {
 	if (typeof window === 'undefined') return null;
-	const key = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
-	const raw = localStorage.getItem(key);
+	const yearMonth = `${year}-${String(month).padStart(2, '0')}`;
+	const key1 = `ipo_confirmed_shifts_${year}_${String(month).padStart(2, '0')}`;
+	const key2 = `shifts_${yearMonth}`;
+	const raw = localStorage.getItem(key1) || localStorage.getItem(key2);
 	if (!raw) return null;
 	try {
 		return JSON.parse(raw);

@@ -1101,10 +1101,8 @@
 				console.warn('Firebase staff details fetch skipped, using initial seed.', e);
 			}
 
-			// 2. 月全体の確定シフトを取得
-			if (!offlineOrMock) {
-				await loadMonthShifts(currentYear, currentMonth);
-			}
+			// 2. 月全体の確定シフトを取得 (LocalStorageキャッシュ 0ms 展開 ＋ Firestore自動取得)
+			await loadMonthShifts(currentYear, currentMonth);
 
 			// 3. 月全体の希望データを取得＆自動シード
 			wishesMapByDate = await loadMonthWishes(currentYear, currentMonth);
