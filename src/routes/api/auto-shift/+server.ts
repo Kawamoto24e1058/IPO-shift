@@ -90,7 +90,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		const body = await request.json();
 		const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = body;
 
-		console.log("Loaded Wishes for Auto-Shift:", wishesMapByDate);
+		console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
+		console.log("Loaded Wishes Map:", wishesMapByDate);
 		console.log('[ShiftGen] Received Staff Data:', JSON.stringify(staffs, null, 2));
 
 		// Firestore から最新の eventDates 配列を取得
@@ -356,7 +357,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			const eligibleStaffs = minifiedStaffs.filter((s: any) => {
 				// 1. 休み希望日（NG日）の絶対除外
 				if (isStaffOff(s, normalizedSlotDate)) {
-					console.log(`[OffDate Guard] Skipped ${s.name} for ${slot.date} (${slot.slotId}) due to off-date wish`);
+					console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: NG Day)`);
 					return false;
 				}
 
@@ -370,7 +371,7 @@ export const POST: RequestHandler = async ({ request }) => {
 				const specificWish = specificWishKey ? s.wishes[specificWishKey] : null;
 				if (specificWish) {
 					if (specificWish === 'ng') {
-						console.log(`[OffDate Guard] Skipped ${s.name} for ${slot.date} (${slot.slotId}) due to specific NG wish`);
+						console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: NG Day)`);
 						return false;
 					} else if (specificWish !== 'free') {
 						const [wStart, wEnd] = specificWish.split('-');
@@ -396,9 +397,12 @@ export const POST: RequestHandler = async ({ request }) => {
 				const personalStartTime = minutesToTime(intersectStart);
 				const personalEndTime = minutesToTime(intersectEnd);
 
-				// 4. 8万円上限ガード
+				// 4. 給与上限（maxMonthlyIncome）絶対ストップガード
 				const addedWage = intersectHours * s.hourly_wage;
-				if (earnedWages[s.id] + addedWage > s.max_monthly_income) return false;
+				if (earnedWages[s.id] + addedWage > s.max_monthly_income) {
+					console.log(`[ShiftGen Filter] Excluded user ${s.name} (${s.id}) on ${slot.date} (Reason: Max Income Reached)`);
+					return false;
+				}
 
 				// 5. 未成年・研修生ワンオペ/ペア禁止ルール
 				const isMinorOrTrainee = s.minor || s.isTrainee;
@@ -536,8 +540,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 
 		// ===================================================
-		// Step 4: 店舗防衛ロジック（無人時間の完全撲滅・開閉店09:45〜20:15カバー保証・ワンオペ抑制）
+		// Step 4 / STAGE 2: 店舗防衛ロジック（無人時間の完全撲滅・開閉店09:45〜20:15カバー保証・ワンオペ抑制）
 		// ===================================================
+		console.log("=== [ShiftGen Engine STAGE 2] Running 20:15 Store Cover Check ===");
 		for (let d = 1; d <= lastDay; d++) {
 			const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 			const normalizedTargetDate = normalizeDateStr(dateStr);
@@ -682,6 +687,18 @@ export const POST: RequestHandler = async ({ request }) => {
 						dayAssignments.push(newAssign);
 						earnedWages[bestStaff.id] += 5.25 * bestStaff.hourly_wage;
 						console.log(`[Store Defense] New closing cover assigned to ${bestStaff.name} on ${dateStr} (15:00-20:15)`);
+					} else if (dayAssignments.length > 0) {
+						// 【絶対強制アサイン】どの方法でも埋まらない場合は当日の最終上がりスタッフを20:15へ強制作業Override
+						const latestAssign = dayAssignments.reduce((prev, curr) => {
+							const [pH, pM] = prev.endTime.split(':').map(Number);
+							const [cH, cM] = curr.endTime.split(':').map(Number);
+							return cH * 60 + cM > pH * 60 + pM ? curr : prev;
+						});
+						const staff = minifiedStaffs.find((s: any) => s.id === latestAssign.assignedStaffId);
+						if (staff) {
+							latestAssign.endTime = '20:15';
+							console.log(`[ShiftGen Stage 2 Force Override] Forced closing shift extension to 20:15 for ${staff.name} on ${dateStr}`);
+						}
 					}
 				}
 			}
