@@ -950,16 +950,11 @@
 		return wishesMap;
 	}
 
-	// 月全体の確定シフトデータをロード (ローカルキャッシュ0ms即時復元 + DB取得 + 空データ上書き防止)
+	// 月全体の確定シフトデータをロード (ローカルキャッシュ0ms即時復元 ＋ Firestore shifts/yearMonth 一括復元)
 	async function loadMonthShifts(year: number, month: number) {
-		// 未確定のステージングプレビュー表示中は、遅延したDB読み込みによる上書きを絶対遮断！
-		if (isStaging) {
-			console.log('[MonthShifts Safe Guard] Active staging preview in progress. Blocking DB load overwrite.');
-			return;
-		}
 		isLoading = true;
 
-		// 1. ローカルキャッシュがあれば最速（0ms）で即時展開
+		// 1. ローカルキャッシュがあれば最速（0ms）で即時復元描画
 		const cachedMap = loadConfirmedShiftsFromLocalCache(year, month);
 		if (cachedMap && Object.keys(cachedMap).length > 0) {
 			const hasAssignments = Object.values(cachedMap).some(
@@ -967,35 +962,38 @@
 			);
 			if (hasAssignments) {
 				monthlyConfirmedShifts = { ...cachedMap };
-				console.log('[MonthShifts] Loaded non-empty shift state from local cache instantly.');
+				console.log('[MonthShifts] Loaded non-empty shift state from LocalStorage cache instantly.');
 			}
 		}
 
-		// 2. DB/Firestore から最新の確定シフトを取得
+		// 2. Firestore の shifts/${targetYearMonth} ドキュメントから自動復元ロード
 		try {
-			const fetchedShifts = await getMonthlyConfirmedShifts(year, month);
-			if (fetchedShifts && fetchedShifts.length > 0) {
-				const hasDbAssignments = fetchedShifts.some(
-					(s) => s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)
-				);
-				if (hasDbAssignments) {
+			const targetYearMonth = `${year}-${String(month).padStart(2, '0')}`;
+			const docSnap = await fetchWithTimeout(getDoc(doc(db, 'shifts', targetYearMonth)), null, 1200);
+
+			if (docSnap && docSnap.exists()) {
+				const data = docSnap.data();
+				if (data && data.assignments && Object.keys(data.assignments).length > 0) {
+					monthlyConfirmedShifts = { ...data.assignments };
+					saveConfirmedShiftsToLocalCache(year, month, data.assignments);
+					console.log(`[MonthShifts] Restored shift data from Firestore doc shifts/${targetYearMonth}`);
+				}
+			} else {
+				// フォールバック取得
+				const fetchedShifts = await getMonthlyConfirmedShifts(year, month);
+				if (fetchedShifts && fetchedShifts.length > 0) {
 					const updatedMap: { [dateStr: string]: DailyShift } = { ...monthlyConfirmedShifts };
 					fetchedShifts.forEach((s) => {
-						if (s.date && s.slots && Object.values(s.slots).some((arr) => Array.isArray(arr) && arr.length > 0)) {
+						if (s.date && s.slots) {
 							updatedMap[s.date] = s;
 						}
 					});
 					monthlyConfirmedShifts = { ...updatedMap };
 					saveConfirmedShiftsToLocalCache(year, month, monthlyConfirmedShifts);
-					console.log('[MonthShifts] Updated shift state from Firestore DB.');
-				} else {
-					console.log('[MonthShifts Safe Guard] Firestore returned empty shift slots. Keeping local staging state.');
 				}
-			} else {
-				console.log('[MonthShifts Safe Guard] No persisted shift found in Firestore yet. Keeping local staging state.');
 			}
 		} catch (err) {
-			console.error('Failed to load monthly confirmed shifts:', err);
+			console.warn('[MonthShifts] Firestore shift fetch skipped or failed, local cache preserved:', err);
 		} finally {
 			isLoading = false;
 		}
