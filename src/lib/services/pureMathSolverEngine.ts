@@ -1,7 +1,7 @@
 // ===================================================
 // Pure Mathematical Deterministic Solver Engine
 // 0.001s Local Generation & Browser Console Log Output
-// 最優先要件追加：フルタイム (09:45-20:15 通し勤務) の物理回避 ＆ 半日シフト分割アサイン
+// 最優先要件追加：フルタイム (09:45-20:15 通し勤務 / 8時間超) の100%絶対物理禁止 ＆ レベル1ガード化
 // ===================================================
 
 function getSlotHours(startTime: string, endTime: string): number {
@@ -219,7 +219,7 @@ function checkLevel1Guard(params: {
 	assignedDays: { [staffId: string]: Set<string> };
 	assignments: Assignment[];
 }): { pass: boolean; reason?: string } {
-	const { staff, dateStr, slotStart, addedWage, earnedWages, assignedDays, assignments } = params;
+	const { staff, dateStr, slotStart, slotEnd, addedWage, earnedWages, assignedDays, assignments } = params;
 	const normalizedTargetDate = normalizeDateStr(dateStr);
 
 	// 1-1. 休み希望日（NG日）の絶対除外 (物理的アサイン100%禁止)
@@ -248,6 +248,14 @@ function checkLevel1Guard(params: {
 		}
 	}
 
+	// 1-5. フルタイム通し勤務 (09:45〜20:15 / 1日8時間超) 絶対物理禁止ガード
+	const [sH, sM] = slotStart.split(':').map(Number);
+	const [eH, eM] = slotEnd.split(':').map(Number);
+	const totalShiftHours = (eH * 60 + eM - (sH * 60 + sM)) / 60;
+	if (totalShiftHours > 8.0 || (slotStart === '09:45' && slotEnd === '20:15')) {
+		return { pass: false, reason: 'Full-Time Shift (09:45-20:15 / >8h) Strictly Prohibited' };
+	}
+
 	return { pass: true };
 }
 
@@ -256,7 +264,7 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 	const { year, month, staffs, wishesMapByDate, unicesEventsByDate, fsDaysByDate } = params;
 	const eventDates = params.eventDates || [];
 
-	console.log("⚡️ [UI] 自動生成ボタンが押されました (フルタイム通し勤務回避 Engine 起動)");
+	console.log("⚡️ [UI] 自動生成ボタンが押されました (フルタイム通し勤務絶対禁止 Engine 起動)");
 	console.log("=== [ShiftGen Engine STAGE 1] Starting generation ===");
 
 	if (!year || !month || !staffs) {
@@ -476,8 +484,6 @@ export function runPureMathAutoShiftEngine(params: EngineInput): { assignments: 
 			const isAlreadyWorkingToday = assignedDays[s.id]?.has(slot.date);
 
 			// 【フルタイム通し出勤 (09:45-20:15) の回避ルール】
-			// すでに当日に1コマ (例: AM 09:45-15:00) アサイン済みのスタッフは、原則として同日の別コマ (例: PM 15:00-20:15) への連投アサインを遮断！
-			// 半日（5.25時間）シフトをベースとして複数人でシェアさせます
 			if (isAlreadyWorkingToday && slot.type !== 'UNICES') {
 				return false;
 			}
