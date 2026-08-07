@@ -1107,27 +1107,66 @@
 		try {
 			const offlineOrMock = isOfflineOrMockMode();
 
-			// 0. UNICES & FS の日程固定設定をロード
-			if (offlineOrMock) {
-				console.log('[Matrix Settings] Bypassed Firestore fetch (Offline/Mock Mode)');
-				initUnicesEvents(currentYear, currentMonth);
-				initFsDays(currentYear, currentMonth);
-			} else {
-				const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
-				const snap = await fetchWithTimeout(
-					getDoc(doc(db, 'system_matrix_settings', docId)),
-					null,
-					800
-				);
-				if (snap && snap.exists()) {
-					const data = snap.data();
-					unicesEventsByDate = data.unicesEvents || {};
-					fsDaysByDate = data.fsDays || {};
-					console.log('[Matrix Settings] Loaded custom UNICES & FS settings from Firestore.');
-				} else {
-					initUnicesEvents(currentYear, currentMonth);
-					initFsDays(currentYear, currentMonth);
+			// 0. UNICES & FS の日程固定設定をロード (LocalStorage 0ms 優先 + Firestore 二重取得)
+			const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
+			let loadedUnices: any = null;
+			let loadedFs: any = null;
+
+			if (typeof window !== 'undefined') {
+				const lsUnices = localStorage.getItem(`unices_events_${docId}`);
+				if (lsUnices) {
+					try {
+						loadedUnices = JSON.parse(lsUnices);
+					} catch {}
 				}
+				const lsFs = localStorage.getItem(`fs_days_${docId}`);
+				if (lsFs) {
+					try {
+						loadedFs = JSON.parse(lsFs);
+					} catch {}
+				}
+			}
+
+			if (!offlineOrMock) {
+				try {
+					const snap = await fetchWithTimeout(
+						getDoc(doc(db, 'system_matrix_settings', docId)),
+						null,
+						800
+					);
+					if (snap && snap.exists()) {
+						const data = snap.data();
+						if (data.unicesEvents) loadedUnices = data.unicesEvents;
+						if (data.fsDays) loadedFs = data.fsDays;
+					}
+
+					const uSnap = await fetchWithTimeout(
+						getDoc(doc(db, 'unices_events', docId)),
+						null,
+						800
+					);
+					if (uSnap && uSnap.exists()) {
+						const uData = uSnap.data();
+						const evData = uData.unicesEvents || uData.eventsData;
+						if (evData && Object.keys(evData).length > 0) {
+							loadedUnices = evData;
+						}
+					}
+				} catch (e) {
+					console.warn('[Matrix Settings] Firestore fetch warning, using local cache.', e);
+				}
+			}
+
+			if (loadedUnices && Object.keys(loadedUnices).length > 0) {
+				unicesEventsByDate = loadedUnices;
+			} else {
+				initUnicesEvents(currentYear, currentMonth);
+			}
+
+			if (loadedFs && Object.keys(loadedFs).length > 0) {
+				fsDaysByDate = loadedFs;
+			} else {
+				initFsDays(currentYear, currentMonth);
 			}
 
 			// 0.1. Global settings (eventDates) をロード
@@ -2052,7 +2091,7 @@
 		}
 	}
 
-	// UNICES & FS日程の永続化
+	// UNICES & FS日程の永続化 (Auto-Save 1秒未満即時書き込み)
 	async function saveUnicesAndFsSettings() {
 		try {
 			const docId = `${currentYear}-${String(currentMonth).padStart(2, '0')}`;
@@ -2060,9 +2099,23 @@
 				localStorage.setItem(`unices_events_${docId}`, JSON.stringify(unicesEventsByDate || {}));
 				localStorage.setItem(`fs_days_${docId}`, JSON.stringify(fsDaysByDate || {}));
 			}
-			const docRef = doc(db, 'system_matrix_settings', docId);
+
+			// Firestore unices_events コレクション保存
+			const docRef1 = doc(db, 'unices_events', docId);
 			await setDoc(
-				docRef,
+				docRef1,
+				{
+					unicesEvents: unicesEventsByDate || {},
+					eventsData: unicesEventsByDate || {},
+					updatedAt: Timestamp.now()
+				},
+				{ merge: true }
+			);
+
+			// Firestore system_matrix_settings コレクション保存
+			const docRef2 = doc(db, 'system_matrix_settings', docId);
+			await setDoc(
+				docRef2,
 				{
 					unicesEvents: unicesEventsByDate || {},
 					fsDays: fsDaysByDate || {},
@@ -2070,7 +2123,7 @@
 				},
 				{ merge: true }
 			);
-			console.log('[Matrix Settings] Successfully saved UNICES & FS schedule to Firestore & LocalStorage.');
+			console.log('[Matrix Settings Auto-Save] Saved UNICES & FS to Firestore & LocalStorage.');
 		} catch (e) {
 			console.error('Failed to save matrix settings:', e);
 		}
