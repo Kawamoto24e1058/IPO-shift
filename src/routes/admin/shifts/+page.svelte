@@ -20,6 +20,7 @@
 		saveConfirmedShiftsToLocalCache,
 		loadConfirmedShiftsFromLocalCache
 	} from '$lib/services/shiftService';
+	import { runPureMathAutoShiftEngine } from '$lib/services/pureMathSolverEngine';
 	import { authState } from '../../../lib/services/authService.svelte.ts';
 	import {
 		doc,
@@ -1143,13 +1144,7 @@
 
 	async function triggerMonthlyAutoGenerate() {
 		isLoading = true;
-		console.log('[AutoGenerate] Starting monthly shift generation for:', { currentYear, currentMonth });
-		console.log('[AutoGenerate] Input details:', {
-			staffsCount: staffs?.length,
-			wishesMapDays: wishesMapByDate ? Object.keys(wishesMapByDate).length : 0,
-			unicesDays: unicesEventsByDate ? Object.keys(unicesEventsByDate).length : 0,
-			fsDays: fsDaysByDate ? Object.keys(fsDaysByDate).length : 0
-		});
+		console.log("⚡️ [UI] 自動生成ボタンが押されました");
 		try {
 			const year = currentYear;
 			const month = currentMonth;
@@ -1200,40 +1195,16 @@
 				};
 			});
 
-			// 1. SvelteKit API エンドポイントを呼び出し
-			console.log('[AutoGenerate] Fetching /api/auto-shift with enriched staffs count:', enrichedStaffs.length);
-			const response = await fetch('/api/auto-shift', {
-				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json'
-				},
-				body: JSON.stringify({
-					year,
-					month,
-					staffs: enrichedStaffs,
-					wishesMapByDate,
-					unicesEventsByDate,
-					fsDaysByDate,
-					considerIncomeWeight
-				})
+			// 1. 純粋 TypeScript 自動生成エンジン関数を直接実行 (0.001秒・ブラウザF12ログ一発表示)
+			const { assignments } = runPureMathAutoShiftEngine({
+				year,
+				month,
+				staffs: enrichedStaffs,
+				wishesMapByDate,
+				unicesEventsByDate,
+				fsDaysByDate,
+				eventDates
 			});
-
-			console.log('[AutoGenerate] Response status:', response.status);
-			if (!response.ok) {
-				const errData = await response.json();
-				console.error('[AutoGenerate] API error response:', errData);
-				throw new Error(errData.error || 'Gemini API auto-generation failed.');
-			}
-
-			const data = await response.json();
-			console.log('[AutoGenerate] Success response data. Assignments count:', data.assignments?.length || 0);
-			const assignments: Array<{
-				date: string;
-				slotId: string;
-				startTime: string;
-				endTime: string;
-				assignedStaffId: string;
-			}> = data.assignments || [];
 
 			// 2. すべての日のスロットを空で初期化
 			const newShiftsMap: { [dateStr: string]: DailyShift } = {};
@@ -1343,12 +1314,15 @@
 			// 自動生成完了時は「未確定・ステージング（仮プレビュー）」状態にする！
 			isStaging = true;
 			isPublished = false;
+			console.log("✅ [UI] 新アルゴリズムによるシフト生成・描画が完了しました", newShiftsMap);
 		} catch (e) {
 			console.error('Error generating monthly shifts:', e);
 		} finally {
 			isLoading = false;
 		}
 	}
+
+	const handleAutoGenerate = triggerMonthlyAutoGenerate;
 
 	/**
 	 * 【⚡️ シフトを確定してスタッフへ送信（公開）】
